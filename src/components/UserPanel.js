@@ -9,7 +9,8 @@ const UserPanel = ({
   title, 
   defaultLang, 
   onSendMessage, 
-  onSystemMessage 
+  onSystemMessage,
+  chatLog
 }) => {
   const [language, setLanguage] = useState(defaultLang);
   const [isListening, setIsListening] = useState(false);
@@ -29,11 +30,19 @@ const UserPanel = ({
     if (socket) {
       const handlePartnerSpeech = (data) => {
         if (userType === 'user2' && data.senderId !== socket.id) {
-          console.log('🎤 Received partner speech:', data);
+          console.log('🎤 Received partner speech in UserPanel:', data);
           setSpeechOutput(data.transcript);
           if (autoSpeak) {
             speakText(data.transcript, data.language);
           }
+          
+          // Also add to chat log
+          onSendMessage({
+            text: data.transcript,
+            lang: data.language,
+            isSent: false,
+            senderId: data.senderId
+          });
         }
       };
 
@@ -43,7 +52,7 @@ const UserPanel = ({
         socket.off('partner-speech', handlePartnerSpeech);
       };
     }
-  }, [socket, userType, autoSpeak]);
+  }, [socket, userType, autoSpeak, onSendMessage]);
 
   const initializeSpeechRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -101,16 +110,17 @@ const UserPanel = ({
       return;
     }
 
-    console.log('🎤 Sending speech:', transcript);
+    console.log('🎤 Sending speech from UserPanel:', transcript);
 
-    // Add message to local chat
+    // Add message to local chat immediately
     onSendMessage({
       text: transcript,
       lang: language,
-      isSent: userType === 'user1'
+      isSent: userType === 'user1',
+      senderId: socket.id
     });
 
-    // Send to partner via socket
+    // Send to ALL users in the room via socket (including sender for confirmation)
     socket.emit('send-message', {
       roomId: room.roomId,
       message: transcript,
@@ -118,7 +128,7 @@ const UserPanel = ({
       translatedLang: userType === 'user1' ? partner.partnerLang : language
     });
 
-    // Send speech data for real-time display
+    // Send speech data for real-time display to partner
     socket.emit('speech-data', {
       roomId: room.roomId,
       transcript: transcript,
@@ -300,6 +310,19 @@ const UserPanel = ({
           <p>Partner speaks: <strong>{getLanguageName(partner.partnerLang)}</strong></p>
         </div>
       )}
+
+      {/* Recent messages preview */}
+      <div className="recent-messages">
+        <h4>Recent Messages:</h4>
+        <div className="messages-list">
+          {chatLog.slice(-3).map((message, index) => (
+            <div key={index} className={`message-preview ${message.isSent ? 'sent' : 'received'}`}>
+              <span className="message-text">{message.text}</span>
+              <span className="message-time">{message.timestamp.toLocaleTimeString()}</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 };

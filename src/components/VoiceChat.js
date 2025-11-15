@@ -10,6 +10,7 @@ const VoiceChat = () => {
   const [isConnected, setIsConnected] = useState(false);
   const [partner, setPartner] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [chatLog, setChatLog] = useState([]);
 
   useEffect(() => {
     // Initialize socket connection
@@ -37,6 +38,7 @@ const VoiceChat = () => {
       console.log('✅ Joined room:', data);
       setRoom(data);
       setPartner(null); // Reset partner when joining new room
+      setChatLog([]); // Clear chat log when joining new room
     });
 
     newSocket.on('partner-joined', (data) => {
@@ -53,20 +55,23 @@ const VoiceChat = () => {
 
     newSocket.on('receive-message', (data) => {
       console.log('📨 Received message:', data);
-      addMessage({
+      addChatMessage({
         text: data.message,
         lang: data.translatedLang,
-        isSent: false,
+        isSent: data.senderId === newSocket.id,
+        senderId: data.senderId,
         timestamp: new Date(data.timestamp)
       });
     });
 
     newSocket.on('partner-speech', (data) => {
       console.log('🎤 Partner speech:', data);
+      // This will be handled in UserPanel component
     });
 
     newSocket.on('translation-result', (data) => {
       console.log('🔄 Translation result:', data);
+      // Handle translation results if needed
     });
 
     newSocket.on('join-error', (error) => {
@@ -108,6 +113,16 @@ const VoiceChat = () => {
       timestamp: new Date()
     };
     setMessages(prev => [...prev, message]);
+    setChatLog(prev => [...prev, message]);
+  };
+
+  const addChatMessage = (messageData) => {
+    const message = {
+      id: Date.now(),
+      ...messageData,
+      timestamp: new Date()
+    };
+    setChatLog(prev => [...prev, message]);
   };
 
   const addMessage = (messageData) => {
@@ -116,7 +131,7 @@ const VoiceChat = () => {
       ...messageData,
       timestamp: new Date()
     };
-    setMessages(prev => [...prev, message]);
+    setChatLog(prev => [...prev, message]);
   };
 
   const getLanguageName = (code) => {
@@ -133,6 +148,7 @@ const VoiceChat = () => {
       socket.emit('leave-room', { roomId: room.roomId });
       setRoom(null);
       setPartner(null);
+      setChatLog([]);
       addSystemMessage('Left the room');
     }
   };
@@ -167,6 +183,7 @@ const VoiceChat = () => {
             defaultLang="en"
             onSendMessage={addMessage}
             onSystemMessage={addSystemMessage}
+            chatLog={chatLog}
           />
           
           <UserPanel
@@ -178,7 +195,28 @@ const VoiceChat = () => {
             defaultLang="es"
             onSendMessage={addMessage}
             onSystemMessage={addSystemMessage}
+            chatLog={chatLog}
           />
+        </div>
+      )}
+
+      {/* Chat Log Display */}
+      {room && (
+        <div className="chat-log">
+          <h3>💬 Chat History</h3>
+          <div className="chat-messages">
+            {chatLog.map((message) => (
+              <div key={message.id} className={`chat-message ${message.isSystem ? 'system' : message.isSent ? 'sent' : 'received'}`}>
+                <div className="message-content">
+                  {message.text}
+                </div>
+                <div className="message-meta">
+                  {message.isSystem ? 'System' : message.isSent ? 'You' : 'Partner'} • 
+                  {message.timestamp.toLocaleTimeString()}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -187,10 +225,11 @@ const VoiceChat = () => {
         <details>
           <summary>Debug Info</summary>
           <div>
-            <p><strong>Socket:</strong> {socket ? 'Connected' : 'Disconnected'}</p>
+            <p><strong>Socket:</strong> {socket ? `Connected (${socket.id})` : 'Disconnected'}</p>
             <p><strong>Room:</strong> {room ? room.roomId : 'None'}</p>
-            <p><strong>Partner:</strong> {partner ? partner.partnerId : 'None'}</p>
+            <p><strong>Partner:</strong> {partner ? `${partner.partnerId} (${partner.partnerLang})` : 'None'}</p>
             <p><strong>Messages:</strong> {messages.length}</p>
+            <p><strong>Chat Log:</strong> {chatLog.length} messages</p>
           </div>
         </details>
       </div>

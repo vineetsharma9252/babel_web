@@ -142,40 +142,50 @@ io.on('connection', (socket) => {
     const { roomId, message, originalLang, translatedLang } = data;
     const room = rooms.get(roomId);
 
+    console.log('📤 Message received:', { roomId, message, originalLang, translatedLang, sender: socket.id });
+
     if (!room || !room.users.has(socket.id)) {
+      console.log('❌ Message rejected - user not in room or room not found');
       return;
     }
 
-    // Broadcast to all other users in the room
-    socket.to(roomId).emit('receive-message', {
+    // Broadcast to ALL users in the room (including sender for confirmation)
+    io.to(roomId).emit('receive-message', {
       message,
       originalLang,
       translatedLang,
       senderId: socket.id,
-      timestamp: new Date()
+      timestamp: new Date(),
+      isOwnMessage: false
     });
 
-    console.log(`Message sent in room ${roomId} by ${socket.id}`);
+    console.log(`✅ Message broadcast to room ${roomId} by ${socket.id}`);
   });
 
   socket.on('speech-data', (data) => {
     const { roomId, transcript, language } = data;
     const room = rooms.get(roomId);
 
+    console.log('🎤 Speech data received:', { roomId, transcript, language, sender: socket.id });
+
     if (!room || !room.users.has(socket.id)) {
       return;
     }
 
-    // Broadcast speech data to partner
+    // Broadcast speech data to all other users in the room
     socket.to(roomId).emit('partner-speech', {
       transcript,
       language,
-      senderId: socket.id
+      senderId: socket.id,
+      timestamp: new Date()
     });
+
+    console.log(`✅ Speech data broadcast to room ${roomId}`);
   });
 
   socket.on('translation-request', async (data) => {
     const { roomId, text, sourceLang, targetLang } = data;
+    console.log('🔄 Translation request:', { text, sourceLang, targetLang });
     
     try {
       // Use MyMemory Translation API
@@ -191,10 +201,12 @@ io.on('connection', (socket) => {
           sourceLang,
           targetLang
         });
+        console.log('✅ Translation successful:', result.responseData.translatedText);
       } else {
-        throw new Error('Translation failed');
+        throw new Error('Translation failed: ' + result.responseDetails);
       }
     } catch (error) {
+      console.error('❌ Translation error:', error);
       // Fallback translation
       const fallback = fallbackTranslation(text, sourceLang, targetLang);
       socket.emit('translation-result', {
@@ -266,7 +278,9 @@ function fallbackTranslation(text, sourceLang, targetLang) {
     'yes': { es: 'sí', fr: 'oui', de: 'ja', hi: 'हाँ', ja: 'はい' },
     'no': { es: 'no', fr: 'non', de: 'nein', hi: 'नहीं', ja: 'いいえ' },
     'how are you': { es: '¿cómo estás?', fr: 'comment ça va?', de: 'wie geht es dir?', hi: 'आप कैसे हैं?', ja: 'お元気ですか？' },
-    'what is your name': { es: '¿cómo te llamas?', fr: 'comment tu t\'appelles?', de: 'wie heißt du?', hi: 'आपका नाम क्या है?', ja: 'お名前は何ですか？' }
+    'what is your name': { es: '¿cómo te llamas?', fr: 'comment tu t\'appelles?', de: 'wie heißt du?', hi: 'आपका नाम क्या है?', ja: 'お名前は何ですか？' },
+    'good morning': { es: 'buenos días', fr: 'bonjour', de: 'guten morgen', hi: 'शुभ प्रभात', ja: 'おはようございます' },
+    'good night': { es: 'buenas noches', fr: 'bonne nuit', de: 'gute nacht', hi: 'शुभ रात्रि', ja: 'おやすみなさい' }
   };
 
   const lowerText = text.toLowerCase();
