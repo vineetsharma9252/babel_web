@@ -24,15 +24,26 @@ const UserPanel = ({
 
   useEffect(() => {
     initializeSpeechRecognition();
-    return () => {
-      if (speechRecognition.current) {
-        speechRecognition.current.stop();
-      }
-      if (currentUtterance.current) {
-        speechSynthesis.current.cancel();
-      }
-    };
-  }, []);
+    
+    // Listen for partner's speech
+    if (socket) {
+      const handlePartnerSpeech = (data) => {
+        if (userType === 'user2' && data.senderId !== socket.id) {
+          console.log('🎤 Received partner speech:', data);
+          setSpeechOutput(data.transcript);
+          if (autoSpeak) {
+            speakText(data.transcript, data.language);
+          }
+        }
+      };
+
+      socket.on('partner-speech', handlePartnerSpeech);
+
+      return () => {
+        socket.off('partner-speech', handlePartnerSpeech);
+      };
+    }
+  }, [socket, userType, autoSpeak]);
 
   const initializeSpeechRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -59,16 +70,22 @@ const UserPanel = ({
         const transcript = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
           finalTranscript += transcript + ' ';
-          handleUserSpeech(transcript);
         } else {
           interimTranscript += transcript;
         }
       }
 
-      setSpeechOutput(prev => `${finalTranscript} ${interimTranscript}`);
+      // Update speech output display
+      setSpeechOutput(finalTranscript + interimTranscript);
+
+      // Handle final transcripts
+      if (finalTranscript.trim()) {
+        handleUserSpeech(finalTranscript.trim());
+      }
     };
 
     speechRecognition.current.onerror = (event) => {
+      console.error('Speech recognition error:', event);
       onSystemMessage(`Speech recognition error: ${event.error}`);
       stopListening();
     };
@@ -80,9 +97,11 @@ const UserPanel = ({
 
   const handleUserSpeech = (transcript) => {
     if (!socket || !room || !partner) {
-      onSystemMessage('No partner connected');
+      onSystemMessage('No partner connected. Speech will not be sent.');
       return;
     }
+
+    console.log('🎤 Sending speech:', transcript);
 
     // Add message to local chat
     onSendMessage({
@@ -136,7 +155,7 @@ const UserPanel = ({
     try {
       speechRecognition.current.start();
     } catch (error) {
-      onSystemMessage('Failed to start speech recognition');
+      onSystemMessage('Failed to start speech recognition: ' + error.message);
     }
   };
 
@@ -195,26 +214,6 @@ const UserPanel = ({
     };
     return names[code] || code;
   };
-
-  // Listen for partner's speech
-  useEffect(() => {
-    if (!socket) return;
-
-    const handlePartnerSpeech = (data) => {
-      if (userType === 'user2') {
-        setSpeechOutput(data.transcript);
-        if (autoSpeak) {
-          speakText(data.transcript, data.language);
-        }
-      }
-    };
-
-    socket.on('partner-speech', handlePartnerSpeech);
-
-    return () => {
-      socket.off('partner-speech', handlePartnerSpeech);
-    };
-  }, [socket, userType, autoSpeak]);
 
   return (
     <div className={`user-panel ${userType}`}>

@@ -19,8 +19,6 @@ app.use(express.static('public'));
 
 // Store active rooms
 const rooms = new Map();
-
-// Store socket to room mapping
 const socketToRoom = new Map();
 
 app.get('/api/health', (req, res) => {
@@ -33,10 +31,12 @@ app.post('/api/rooms', (req, res) => {
     id: roomId,
     host: null,
     users: new Map(),
-    createdAt: new Date()
+    createdAt: new Date(),
+    maxUsers: 2
   };
   
   rooms.set(roomId, room);
+  console.log(`Room created: ${roomId}`);
   res.json({ roomId, success: true });
 });
 
@@ -48,6 +48,7 @@ app.get('/api/rooms/:roomId', (req, res) => {
   res.json({
     roomId: room.id,
     userCount: room.users.size,
+    maxUsers: room.maxUsers,
     createdAt: room.createdAt
   });
 });
@@ -58,16 +59,29 @@ io.on('connection', (socket) => {
 
   socket.on('join-room', (data) => {
     const { roomId, userLang, userName = 'User' } = data;
+    console.log(`Join attempt: ${socket.id} to room ${roomId}`);
+
     const room = rooms.get(roomId);
 
     if (!room) {
-      socket.emit('error', { message: 'Room not found' });
+      socket.emit('join-error', { message: 'Room not found' });
+      console.log(`Room ${roomId} not found`);
       return;
     }
 
-    if (room.users.size >= 2) {
-      socket.emit('error', { message: 'Room is full (max 2 users)' });
+    if (room.users.size >= room.maxUsers) {
+      socket.emit('join-error', { message: 'Room is full (max 2 users)' });
+      console.log(`Room ${roomId} is full`);
       return;
+    }
+
+    // Check if user is already in a room
+    if (socketToRoom.has(socket.id)) {
+      const currentRoomId = socketToRoom.get(socket.id);
+      if (currentRoomId === roomId) {
+        socket.emit('join-error', { message: 'Already in this room' });
+        return;
+      }
     }
 
     // Join the room
@@ -88,25 +102,36 @@ io.on('connection', (socket) => {
       room.host = socket.id;
     }
 
-    console.log(`User ${socket.id} joined room ${roomId}`);
+    console.log(`User ${socket.id} joined room ${roomId}. Total users: ${room.users.size}`);
     
     // Notify the user who just joined
     socket.emit('joined-room', {
       roomId,
       isHost: room.host === socket.id,
-      partnerConnected: room.users.size > 1
+      partnerConnected: room.users.size > 1,
+      users: Array.from(room.users.values())
     });
 
-    // Notify other users in the room
+    // Notify other users in the room about the new user
     if (room.users.size > 1) {
       socket.to(roomId).emit('partner-joined', {
         partnerId: socket.id,
         partnerLang: userLang,
         partnerName: userName
       });
+      
+      // Also send the current user info to the new user about existing partners
+      const otherUsers = Array.from(room.users.values()).filter(user => user.id !== socket.id);
+      otherUsers.forEach(partner => {
+        socket.emit('partner-joined', {
+          partnerId: partner.id,
+          partnerLang: partner.language,
+          partnerName: partner.name
+        });
+      });
     }
 
-    // Send current room state to all users
+    // Send updated room state to all users
     io.to(roomId).emit('room-update', {
       userCount: room.users.size,
       users: Array.from(room.users.values())
@@ -181,41 +206,20 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('leave-room', (data) => {
+    const { roomId } = data;
+    leaveRoom(socket, roomId);
+  });
+
   socket.on('disconnect', () => {
     const roomId = socketToRoom.get(socket.id);
-    
     if (roomId) {
-      const room = rooms.get(roomId);
-      if (room) {
-        room.users.delete(socket.id);
-        socketToRoom.delete(socket.id);
-
-        // Notify other users
-        socket.to(roomId).emit('partner-left', { partnerId: socket.id });
-
-        // Update room state
-        if (room.users.size > 0) {
-          io.to(roomId).emit('room-update', {
-            userCount: room.users.size,
-            users: Array.from(room.users.values())
-          });
-        } else {
-          // Remove empty room after 5 minutes
-          setTimeout(() => {
-            if (rooms.get(roomId)?.users.size === 0) {
-              rooms.delete(roomId);
-              console.log(`Room ${roomId} removed due to inactivity`);
-            }
-          }, 5 * 60 * 1000);
-        }
-      }
+      leaveRoom(socket, roomId);
     }
-
     console.log('User disconnected:', socket.id);
   });
 
-  socket.on('leave-room', (data) => {
-    const { roomId } = data;
+  function leaveRoom(socket, roomId) {
     const room = rooms.get(roomId);
     
     if (room) {
@@ -223,16 +227,33 @@ io.on('connection', (socket) => {
       socketToRoom.delete(socket.id);
       socket.leave(roomId);
       
+      console.log(`User ${socket.id} left room ${roomId}. Remaining users: ${room.users.size}`);
+      
+      // Notify other users
       socket.to(roomId).emit('partner-left', { partnerId: socket.id });
       
       if (room.users.size > 0) {
+        // Update host if host left
+        if (room.host === socket.id) {
+          const newHost = Array.from(room.users.keys())[0];
+          room.host = newHost;
+        }
+        
         io.to(roomId).emit('room-update', {
           userCount: room.users.size,
           users: Array.from(room.users.values())
         });
+      } else {
+        // Remove empty room after 1 minute
+        setTimeout(() => {
+          if (rooms.get(roomId)?.users.size === 0) {
+            rooms.delete(roomId);
+            console.log(`Room ${roomId} removed due to inactivity`);
+          }
+        }, 60000);
       }
     }
-  });
+  }
 });
 
 // Fallback translation function
@@ -255,7 +276,7 @@ function fallbackTranslation(text, sourceLang, targetLang) {
     }
   }
 
-  return `[Translation: ${text}]`;
+  return text; // Return original text if no translation found
 }
 
 const PORT = process.env.PORT || 3001;

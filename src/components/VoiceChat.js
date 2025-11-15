@@ -14,35 +14,45 @@ const VoiceChat = () => {
   useEffect(() => {
     // Initialize socket connection
     const serverUrl = process.env.REACT_APP_SERVER_URL || 'http://localhost:3001';
-    const newSocket = io(serverUrl);
+    console.log('Connecting to server:', serverUrl);
+    
+    const newSocket = io(serverUrl, {
+      transports: ['websocket', 'polling'],
+      timeout: 10000
+    });
+    
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
       setIsConnected(true);
-      console.log('Connected to server');
+      console.log('✅ Connected to server with ID:', newSocket.id);
     });
 
-    newSocket.on('disconnect', () => {
+    newSocket.on('disconnect', (reason) => {
       setIsConnected(false);
-      console.log('Disconnected from server');
+      console.log('❌ Disconnected from server:', reason);
     });
 
     newSocket.on('joined-room', (data) => {
+      console.log('✅ Joined room:', data);
       setRoom(data);
-      console.log('Joined room:', data);
+      setPartner(null); // Reset partner when joining new room
     });
 
     newSocket.on('partner-joined', (data) => {
+      console.log('🤝 Partner joined:', data);
       setPartner(data);
       addSystemMessage(`Partner joined! They speak ${getLanguageName(data.partnerLang)}`);
     });
 
-    newSocket.on('partner-left', () => {
+    newSocket.on('partner-left', (data) => {
+      console.log('👋 Partner left:', data);
       setPartner(null);
       addSystemMessage('Partner left the room');
     });
 
     newSocket.on('receive-message', (data) => {
+      console.log('📨 Received message:', data);
       addMessage({
         text: data.message,
         lang: data.translatedLang,
@@ -52,24 +62,27 @@ const VoiceChat = () => {
     });
 
     newSocket.on('partner-speech', (data) => {
-      // Handle partner's speech data
-      console.log('Partner speech:', data);
+      console.log('🎤 Partner speech:', data);
     });
 
     newSocket.on('translation-result', (data) => {
-      // Handle translation results
-      console.log('Translation result:', data);
+      console.log('🔄 Translation result:', data);
     });
 
-    newSocket.on('error', (error) => {
-      console.error('Socket error:', error);
-      alert(error.message);
+    newSocket.on('join-error', (error) => {
+      console.error('❌ Join error:', error);
+      alert(`Join failed: ${error.message}`);
+    });
+
+    newSocket.on('room-update', (data) => {
+      console.log('🔄 Room update:', data);
     });
 
     // Check for room in URL parameters
     const urlParams = new URLSearchParams(window.location.search);
     const roomId = urlParams.get('room');
     if (roomId && newSocket) {
+      console.log('🔄 Auto-joining room from URL:', roomId);
       setTimeout(() => {
         newSocket.emit('join-room', {
           roomId: roomId,
@@ -81,6 +94,7 @@ const VoiceChat = () => {
 
     return () => {
       if (newSocket) {
+        console.log('🧹 Cleaning up socket connection');
         newSocket.close();
       }
     };
@@ -114,6 +128,15 @@ const VoiceChat = () => {
     return names[code] || code;
   };
 
+  const handleLeaveRoom = () => {
+    if (socket && room) {
+      socket.emit('leave-room', { roomId: room.roomId });
+      setRoom(null);
+      setPartner(null);
+      addSystemMessage('Left the room');
+    }
+  };
+
   return (
     <div className="voice-chat-container">
       <div className="header">
@@ -121,6 +144,7 @@ const VoiceChat = () => {
         <p>Real-time P2P Communication - Works Across Devices!</p>
         <div className="connection-status">
           Status: {isConnected ? '🟢 Connected' : '🔴 Disconnected'}
+          {socket && <span> | ID: {socket.id}</span>}
         </div>
       </div>
 
@@ -129,6 +153,7 @@ const VoiceChat = () => {
         room={room}
         partner={partner}
         onSystemMessage={addSystemMessage}
+        onLeaveRoom={handleLeaveRoom}
       />
 
       {room && (
@@ -156,6 +181,19 @@ const VoiceChat = () => {
           />
         </div>
       )}
+
+      {/* Debug info */}
+      <div className="debug-info">
+        <details>
+          <summary>Debug Info</summary>
+          <div>
+            <p><strong>Socket:</strong> {socket ? 'Connected' : 'Disconnected'}</p>
+            <p><strong>Room:</strong> {room ? room.roomId : 'None'}</p>
+            <p><strong>Partner:</strong> {partner ? partner.partnerId : 'None'}</p>
+            <p><strong>Messages:</strong> {messages.length}</p>
+          </div>
+        </details>
+      </div>
     </div>
   );
 };
