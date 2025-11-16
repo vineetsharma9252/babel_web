@@ -71,30 +71,56 @@ function getRoom(roomId) {
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log('✅ User connected:', socket.id);
+
+  // Store peer info immediately on connection
+  const peer = {
+    id: socket.id,
+    roomId: null,
+    transports: new Map(),
+    producers: new Map(),
+    consumers: new Map(),
+    rtpCapabilities: null,
+    userLang: 'en',
+    userName: 'User'
+  };
+  peers.set(socket.id, peer);
 
   socket.on('create-room', async (data, callback) => {
     try {
       const roomId = uuidv4().substring(0, 8).toUpperCase();
       const room = createRoom(roomId);
       
-      const peer = {
-        id: socket.id,
-        roomId,
-        transports: new Map(),
-        producers: new Map(),
-        consumers: new Map(),
-        rtpCapabilities: null,
-        userLang: data.userLang || 'en',
-        userName: data.userName || 'User'
-      };
+      // Update peer info
+      peer.roomId = roomId;
+      peer.userLang = data.userLang || 'en';
+      peer.userName = data.userName || 'User';
       
-      peers.set(socket.id, peer);
       room.peers.set(socket.id, peer);
       socket.join(roomId);
 
-      callback({ success: true, roomId });
+      callback({ 
+        success: true, 
+        roomId,
+        peers: Array.from(room.peers.values()).map(p => ({
+          id: p.id,
+          userLang: p.userLang,
+          userName: p.userName
+        }))
+      });
+      
       console.log(`✅ Room created: ${roomId} by ${socket.id}`);
+      
+      // Notify the creator that they joined
+      socket.emit('joined-room', {
+        roomId: roomId,
+        peers: Array.from(room.peers.values()).map(p => ({
+          partnerId: p.id,
+          partnerLang: p.userLang,
+          partnerName: p.userName
+        }))
+      });
+
     } catch (error) {
       console.error('Error creating room:', error);
       callback({ success: false, error: error.message });
@@ -116,28 +142,18 @@ io.on('connection', (socket) => {
         return;
       }
 
-      const peer = {
-        id: socket.id,
-        roomId,
-        transports: new Map(),
-        producers: new Map(),
-        consumers: new Map(),
-        rtpCapabilities: null,
-        userLang: userLang || 'es',
-        userName: userName || 'Partner'
-      };
-
-      peers.set(socket.id, peer);
+      // Update peer info
+      peer.roomId = roomId;
+      peer.userLang = userLang || 'es';
+      peer.userName = userName || 'Partner';
+      
       room.peers.set(socket.id, peer);
       socket.join(roomId);
-
-      // Get router RTP capabilities
-      const rtpCapabilities = router.rtpCapabilities;
 
       callback({ 
         success: true, 
         roomId,
-        rtpCapabilities,
+        rtpCapabilities: router.rtpCapabilities,
         peers: Array.from(room.peers.values()).map(p => ({
           id: p.id,
           userLang: p.userLang,
@@ -147,11 +163,21 @@ io.on('connection', (socket) => {
 
       console.log(`✅ User ${socket.id} joined room ${roomId}`);
 
+      // Notify the joiner that they joined
+      socket.emit('joined-room', {
+        roomId: roomId,
+        peers: Array.from(room.peers.values()).map(p => ({
+          partnerId: p.id,
+          partnerLang: p.userLang,
+          partnerName: p.userName
+        }))
+      });
+
       // Notify other peers
-      socket.to(roomId).emit('peer-joined', {
-        peerId: socket.id,
-        userLang,
-        userName
+      socket.to(roomId).emit('partner-joined', {
+        partnerId: socket.id,
+        partnerLang: userLang || 'es',
+        partnerName: userName || 'Partner'
       });
 
     } catch (error) {
@@ -160,227 +186,86 @@ io.on('connection', (socket) => {
     }
   });
 
-  // WebRTC Transport creation
-  socket.on('create-transport', async (data, callback) => {
+  // Add the speech translation handler
+  socket.on('speech-translation-request', async (data) => {
     try {
-      const { peerId } = data;
-      const peer = peers.get(peerId || socket.id);
-      
-      if (!peer) {
-        callback({ success: false, error: 'Peer not found' });
+      const { roomId, transcript, sourceLang, targetLang } = data;
+      const room = getRoom(roomId);
+
+      if (!room) {
+        console.error('Room not found for translation');
         return;
       }
 
-      const transport = await router.createWebRtcTransport({
-        listenIps: [
-          {
-            ip: '0.0.0.0',
-            announcedIp: getAnnouncedIp()
-          }
-        ],
-        enableUdp: true,
-        enableTcp: true,
-        preferUdp: true,
-      });
+      console.log(`🔄 Translating: "${transcript}" from ${sourceLang} to ${targetLang}`);
 
-      peer.transports.set(transport.id, transport);
-
-      callback({
-        success: true,
-        transport: {
-          id: transport.id,
-          iceParameters: transport.iceParameters,
-          iceCandidates: transport.iceCandidates,
-          dtlsParameters: transport.dtlsParameters
-        }
-      });
-
-      transport.on('dtlsstatechange', (dtlsState) => {
-        if (dtlsState === 'closed') {
-          transport.close();
-        }
-      });
-
-    } catch (error) {
-      console.error('Error creating transport:', error);
-      callback({ success: false, error: error.message });
-    }
-  });
-
-  // Connect transport
-  socket.on('connect-transport', async (data, callback) => {
-    try {
-      const { transportId, dtlsParameters } = data;
-      const peer = peers.get(socket.id);
-      
-      if (!peer) {
-        callback({ success: false, error: 'Peer not found' });
-        return;
-      }
-
-      const transport = peer.transports.get(transportId);
-      if (!transport) {
-        callback({ success: false, error: 'Transport not found' });
-        return;
-      }
-
-      await transport.connect({ dtlsParameters });
-      callback({ success: true });
-
-    } catch (error) {
-      console.error('Error connecting transport:', error);
-      callback({ success: false, error: error.message });
-    }
-  });
-
-  // Produce audio
-  socket.on('produce-audio', async (data, callback) => {
-    try {
-      const { transportId, kind, rtpParameters } = data;
-      const peer = peers.get(socket.id);
-      const room = getRoom(peer.roomId);
-
-      if (!peer || !room) {
-        callback({ success: false, error: 'Peer or room not found' });
-        return;
-      }
-
-      const transport = peer.transports.get(transportId);
-      if (!transport) {
-        callback({ success: false, error: 'Transport not found' });
-        return;
-      }
-
-      const producer = await transport.produce({
-        kind,
-        rtpParameters
-      });
-
-      peer.producers.set(producer.id, producer);
-      room.audioProducers.set(producer.id, producer);
-
-      callback({ success: true, id: producer.id });
-
-      // Notify other peers about new producer
-      socket.to(room.id).emit('new-producer', {
-        peerId: socket.id,
-        producerId: producer.id,
-        kind: producer.kind
-      });
-
-      console.log(`🎤 Audio producer created: ${producer.id} for peer ${socket.id}`);
-
-    } catch (error) {
-      console.error('Error producing audio:', error);
-      callback({ success: false, error: error.message });
-    }
-  });
-
-  // Consume audio
-  socket.on('consume-audio', async (data, callback) => {
-    try {
-      const { transportId, producerId, rtpCapabilities } = data;
-      const peer = peers.get(socket.id);
-      const room = getRoom(peer.roomId);
-
-      if (!peer || !room) {
-        callback({ success: false, error: 'Peer or room not found' });
-        return;
-      }
-
-      const transport = peer.transports.get(transportId);
-      if (!transport) {
-        callback({ success: false, error: 'Transport not found' });
-        return;
-      }
-
-      if (!router.canConsume({ producerId, rtpCapabilities })) {
-        callback({ success: false, error: 'Cannot consume' });
-        return;
-      }
-
-      const consumer = await transport.consume({
-        producerId,
-        rtpCapabilities,
-        paused: false
-      });
-
-      peer.consumers.set(consumer.id, consumer);
-      room.audioConsumers.set(consumer.id, consumer);
-
-      callback({
-        success: true,
-        consumer: {
-          id: consumer.id,
-          producerId: consumer.producerId,
-          kind: consumer.kind,
-          rtpParameters: consumer.rtpParameters
-        }
-      });
-
-      consumer.on('transportclose', () => {
-        consumer.close();
-        peer.consumers.delete(consumer.id);
-      });
-
-    } catch (error) {
-      console.error('Error consuming audio:', error);
-      callback({ success: false, error: error.message });
-    }
-  });
-
-  // Text message handling
-  socket.on('send-message', (data) => {
-    const { roomId, message, originalLang, translatedLang } = data;
-    const room = getRoom(roomId);
-
-    if (!room) return;
-
-    console.log('📨 Message received:', { roomId, message, sender: socket.id });
-
-    // Broadcast to all users in the room
-    io.to(roomId).emit('receive-message', {
-      message,
-      originalLang,
-      translatedLang,
-      senderId: socket.id,
-      timestamp: new Date()
-    });
-  });
-
-  // Translation request
-  socket.on('translation-request', async (data) => {
-    const { text, sourceLang, targetLang } = data;
-    
-    try {
+      // Translate the speech
       const response = await fetch(
-        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`
+        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(transcript)}&langpair=${sourceLang}|${targetLang}`
       );
       const result = await response.json();
       
+      let translatedText = transcript; // Fallback to original
+      
       if (result.responseStatus === 200) {
-        socket.emit('translation-result', {
-          original: text,
-          translated: result.responseData.translatedText,
-          sourceLang,
-          targetLang
-        });
+        translatedText = result.responseData.translatedText;
       } else {
-        throw new Error('Translation failed');
+        console.warn('Translation API failed, using fallback');
+        translatedText = fallbackTranslation(transcript, sourceLang, targetLang);
       }
-    } catch (error) {
-      const fallback = fallbackTranslation(text, sourceLang, targetLang);
-      socket.emit('translation-result', {
-        original: text,
-        translated: fallback,
+
+      // Send translated speech to the partner
+      const senderPeer = peers.get(socket.id);
+      if (senderPeer) {
+        // Find the partner in the room
+        room.peers.forEach((peer) => {
+          if (peer.id !== socket.id) {
+            // Send to the partner
+            io.to(peer.id).emit('translated-speech', {
+              originalText: transcript,
+              translatedText: translatedText,
+              sourceLang: sourceLang,
+              targetLang: targetLang,
+              senderId: socket.id,
+              senderName: senderPeer.userName
+            });
+            console.log(`✅ Sent translated speech to ${peer.id}`);
+          }
+        });
+      }
+
+      // Also send back to sender for confirmation
+      socket.emit('translation-complete', {
+        original: transcript,
+        translated: translatedText,
         sourceLang,
         targetLang
       });
+
+    } catch (error) {
+      console.error('Translation error:', error);
+      
+      // Fallback: send original text if translation fails
+      const room = getRoom(data.roomId);
+      if (room) {
+        room.peers.forEach((peer) => {
+          if (peer.id !== socket.id) {
+            io.to(peer.id).emit('translated-speech', {
+              originalText: data.transcript,
+              translatedText: data.transcript, // Fallback to original
+              sourceLang: data.sourceLang,
+              targetLang: data.targetLang,
+              senderId: socket.id
+            });
+          }
+        });
+      }
     }
   });
 
   // Handle disconnection
   socket.on('disconnect', () => {
+    console.log('❌ User disconnected:', socket.id);
     const peer = peers.get(socket.id);
     if (peer) {
       const room = getRoom(peer.roomId);
@@ -388,7 +273,7 @@ io.on('connection', (socket) => {
         room.peers.delete(socket.id);
         
         // Notify other peers
-        socket.to(room.id).emit('peer-left', { peerId: socket.id });
+        socket.to(room.id).emit('partner-left', { partnerId: socket.id });
 
         // Cleanup MediaSoup resources
         peer.transports.forEach(transport => transport.close());
@@ -398,22 +283,22 @@ io.on('connection', (socket) => {
         // Remove empty room
         if (room.peers.size === 0) {
           rooms.delete(room.id);
-          console.log(`Room ${room.id} removed`);
+          console.log(`🗑️ Room ${room.id} removed`);
         }
       }
       peers.delete(socket.id);
     }
-    console.log('User disconnected:', socket.id);
   });
 
   socket.on('leave-room', () => {
+    console.log('🚪 User leaving room:', socket.id);
     const peer = peers.get(socket.id);
     if (peer) {
       const room = getRoom(peer.roomId);
       if (room) {
         socket.leave(room.id);
         room.peers.delete(socket.id);
-        socket.to(room.id).emit('peer-left', { peerId: socket.id });
+        socket.to(room.id).emit('partner-left', { partnerId: socket.id });
 
         // Cleanup MediaSoup resources
         peer.transports.forEach(transport => transport.close());
@@ -423,18 +308,19 @@ io.on('connection', (socket) => {
         if (room.peers.size === 0) {
           rooms.delete(room.id);
         }
+        
+        // Reset peer roomId
+        peer.roomId = null;
       }
-      peers.delete(socket.id);
     }
   });
 });
 
 // Helper functions
-
 function getAnnouncedIp() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {   // renamed from 'interface' to 'iface'
+    for (const iface of interfaces[name]) {
       if (iface.family === 'IPv4' && !iface.internal) {
         return iface.address;
       }
