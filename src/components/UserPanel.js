@@ -5,38 +5,36 @@ const UserPanel = ({
   socket, 
   room, 
   partner, 
-  userType, 
-  title, 
-  defaultLang, 
+  userLanguage,
+  userName,
   onSendMessage, 
   onSystemMessage,
-  chatLog
+  chatLog,
+  onLeaveRoom
 }) => {
-  const [language, setLanguage] = useState(defaultLang);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [speechOutput, setSpeechOutput] = useState('');
-  const [translatedOutput, setTranslatedOutput] = useState('');
+  const [mySpeech, setMySpeech] = useState('');
+  const [translatedSpeech, setTranslatedSpeech] = useState('');
   const [autoSpeak, setAutoSpeak] = useState(true);
   
   const speechRecognition = useRef(null);
   const speechSynthesis = useRef(window.speechSynthesis);
   const currentUtterance = useRef(null);
-  const recognitionTimeout = useRef(null);
 
   useEffect(() => {
     initializeSpeechRecognition();
     
-    // Listen for speech that needs to be spoken
+    // Listen for translated speech from partner
     if (socket) {
       const handleSpeechToSpeak = (data) => {
-        console.log('🎧 Received speech to speak:', data);
+        console.log('🎧 Received translated speech:', data);
         
         if (data.senderId !== socket.id) { // Only process partner's speech
-          // Display the translated text
-          setTranslatedOutput(data.text);
+          // Display what you hear (translated version)
+          setTranslatedSpeech(data.text);
           
-          // Add to chat log immediately
+          // Add to chat log
           addToChatLog({
             original: data.originalText,
             translated: data.text,
@@ -47,28 +45,27 @@ const UserPanel = ({
             timestamp: data.timestamp
           });
           
-          // Auto-speak the translated text IMMEDIATELY
+          // Auto-speak the translated text (what you hear)
           if (autoSpeak) {
-            console.log('🔊 Auto-speaking translated text:', data.text);
-            speakText(data.text, data.targetLang);
+            console.log('🔊 Speaking translated text:', data.text);
+            speakText(data.text, userLanguage); // Speak in YOUR language
           }
           
-          onSystemMessage(`Partner: "${data.originalText}" → "${data.text}"`);
+          onSystemMessage(`You heard: "${data.text}"`);
         }
       };
 
       const handleSpeechSent = (data) => {
-        console.log('✅ Speech sent confirmation:', data);
-        setTranslatedOutput(data.translated);
+        console.log('✅ Your speech was sent:', data);
         addToChatLog({
           original: data.original,
           translated: data.translated,
-          sourceLang: language,
+          sourceLang: userLanguage,
           targetLang: data.targetLang,
           isSent: true,
           senderId: socket.id
         });
-        onSystemMessage(`You said: "${data.original}" → "${data.translated}"`);
+        onSystemMessage(`You said: "${data.original}"`);
       };
 
       socket.on('speech-to-speak', handleSpeechToSpeak);
@@ -79,7 +76,7 @@ const UserPanel = ({
         socket.off('speech-sent', handleSpeechSent);
       };
     }
-  }, [socket, autoSpeak, onSystemMessage, language]);
+  }, [socket, autoSpeak, onSystemMessage, userLanguage]);
 
   const initializeSpeechRecognition = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -92,14 +89,14 @@ const UserPanel = ({
     speechRecognition.current = new SpeechRecognition();
     speechRecognition.current.continuous = true;
     speechRecognition.current.interimResults = true;
-    speechRecognition.current.lang = getTTSLanguage(language);
+    speechRecognition.current.lang = getTTSLanguage(userLanguage);
 
     speechRecognition.current.onstart = () => {
-      console.log('🎤 Speech recognition STARTED');
+      console.log('🎤 Started listening');
       setIsListening(true);
-      setSpeechOutput('');
-      setTranslatedOutput('');
-      onSystemMessage('Started listening... Speak now!');
+      setMySpeech('');
+      setTranslatedSpeech('');
+      onSystemMessage('Listening... Speak now!');
     };
 
     speechRecognition.current.onresult = (event) => {
@@ -115,17 +112,13 @@ const UserPanel = ({
         }
       }
 
-      // Update speech output display in real-time
+      // Update speech display in real-time
       const fullTranscript = (finalTranscript + interimTranscript).trim();
-      setSpeechOutput(fullTranscript);
+      setMySpeech(fullTranscript);
 
-      // Handle final transcripts IMMEDIATELY
+      // Send final transcripts immediately
       if (finalTranscript.trim()) {
-        console.log('🎯 Final speech detected, sending immediately:', finalTranscript.trim());
         handleUserSpeech(finalTranscript.trim());
-        
-        // Clear interim results after sending final
-        setSpeechOutput(finalTranscript.trim());
       }
     };
 
@@ -136,33 +129,27 @@ const UserPanel = ({
     };
 
     speechRecognition.current.onend = () => {
-      console.log('🛑 Speech recognition ended');
+      console.log('🛑 Stopped listening');
       setIsListening(false);
     };
   };
 
   const handleUserSpeech = (transcript) => {
     if (!socket || !room || !partner) {
-      onSystemMessage('No partner connected. Speech will not be sent.');
+      onSystemMessage('No partner connected');
       return;
     }
 
-    console.log('🚀 Sending real-time speech:', transcript);
+    console.log('🚀 Sending speech for translation:', transcript);
 
-    // Determine target language - always translate to partner's language
-    const targetLang = partner.partnerLang;
-    const sourceLang = language;
-
-    // Send for IMMEDIATE translation and delivery
+    // Send for translation to partner's language
     socket.emit('real-time-speech', {
       roomId: room.roomId,
       transcript: transcript,
-      sourceLang: sourceLang,
-      targetLang: targetLang
+      sourceLang: userLanguage, // Your language
+      targetLang: partner.partnerLang // Partner's language
     });
 
-    // Show immediate feedback
-    setTranslatedOutput('Translating...');
     onSystemMessage(`Sending: "${transcript}"`);
   };
 
@@ -183,8 +170,7 @@ const UserPanel = ({
       return;
     }
 
-    const ttsLang = getTTSLanguage(language);
-    speechRecognition.current.lang = ttsLang;
+    speechRecognition.current.lang = getTTSLanguage(userLanguage);
     
     try {
       speechRecognition.current.start();
@@ -208,15 +194,14 @@ const UserPanel = ({
     utterance.lang = getTTSLanguage(lang);
     utterance.rate = 0.9;
     utterance.volume = 1.0;
-    utterance.pitch = 1.0;
     
     utterance.onstart = () => {
-      console.log('🔊 Speech synthesis started');
+      console.log('🔊 Started speaking');
       setIsSpeaking(true);
     };
 
     utterance.onend = () => {
-      console.log('🔇 Speech synthesis ended');
+      console.log('🔇 Finished speaking');
       setIsSpeaking(false);
     };
 
@@ -226,13 +211,7 @@ const UserPanel = ({
     };
 
     currentUtterance.current = utterance;
-    
-    try {
-      speechSynthesis.current.speak(utterance);
-      console.log('✅ Speak method called successfully');
-    } catch (error) {
-      console.error('❌ Speak method failed:', error);
-    }
+    speechSynthesis.current.speak(utterance);
   };
 
   const stopSpeaking = () => {
@@ -240,30 +219,6 @@ const UserPanel = ({
       speechSynthesis.current.cancel();
       setIsSpeaking(false);
     }
-  };
-
-  const testInstantTranslation = () => {
-    if (!socket || !room || !partner) {
-      onSystemMessage('Need partner connection to test');
-      return;
-    }
-
-    const testPhrases = {
-      'user1': ['Hello, how are you?', 'What is your name?', 'Thank you very much'],
-      'user2': ['Hola, ¿cómo estás?', '¿Cómo te llamas?', 'Muchas gracias']
-    };
-
-    const testText = testPhrases[userType]?.[0] || 'Test message';
-    console.log('🧪 Testing instant translation:', testText);
-    
-    const targetLang = partner.partnerLang;
-    
-    socket.emit('real-time-speech', {
-      roomId: room.roomId,
-      transcript: testText,
-      sourceLang: language,
-      targetLang: targetLang
-    });
   };
 
   const getTTSLanguage = (langCode) => {
@@ -285,122 +240,100 @@ const UserPanel = ({
   };
 
   return (
-    <div className={`user-panel ${userType}`}>
-      <h2>
-        <span className={`user-indicator ${userType}-indicator`}></span>
-        {title} ({getLanguageName(language)})
-      </h2>
-      
-      <div className="controls">
-        <select 
-          value={language} 
-          onChange={(e) => setLanguage(e.target.value)}
-          disabled={userType === 'user2' && !partner}
-          className="language-select"
-        >
-          <option value="en">English</option>
-          <option value="es">Spanish</option>
-          <option value="fr">French</option>
-          <option value="de">German</option>
-          <option value="it">Italian</option>
-          <option value="ja">Japanese</option>
-          <option value="ko">Korean</option>
-          <option value="zh">Chinese</option>
-          <option value="ru">Russian</option>
-          <option value="ar">Arabic</option>
-          <option value="hi">Hindi</option>
-          <option value="pt">Portuguese</option>
-        </select>
-        
-        <button 
-          onClick={startListening} 
-          disabled={isListening || !partner}
-          className={`speak-btn ${isListening ? 'listening' : ''}`}
-        >
-          {isListening ? '🎤 Speaking...' : 'Start Speaking'}
-        </button>
-        
-        <button 
-          onClick={stopListening} 
-          disabled={!isListening}
-          className="stop-btn"
-        >
-          Stop
-        </button>
-        
-        <button 
-          onClick={testInstantTranslation}
-          disabled={!partner}
-          className="test-btn"
-        >
-          Test Translation
-        </button>
-      </div>
-
-      <div className={`status ${isListening ? 'listening' : isSpeaking ? 'speaking' : 'idle'}`}>
-        {isListening ? '🎤 Listening... Speak now!' : 
-         isSpeaking ? '🔊 Speaking translation...' : 
-         'Ready for conversation'}
-      </div>
-
-      {/* Real-time Speech Output */}
-      <div className="output-section">
-        <label>Your Speech (Real-time):</label>
-        <div className="output-box original-speech">
-          {speechOutput || 'Start speaking... your words appear here instantly'}
+    <div className="single-user-panel">
+      <div className="panel-header">
+        <h2>🎤 Voice Translator</h2>
+        <div className="user-info">
+          <span>You: {userName} ({getLanguageName(userLanguage)})</span>
+          {partner && (
+            <span>Partner: {partner.partnerName} ({getLanguageName(partner.partnerLang)})</span>
+          )}
+          <button onClick={onLeaveRoom} className="leave-btn">Leave Room</button>
         </div>
       </div>
 
-      {/* Translated Output */}
-      <div className="output-section">
-        <label>Translated Speech:</label>
-        <div className="output-box translated-speech">
-          {translatedOutput || 'Translation will appear here instantly'}
+      {/* Speaking Section */}
+      <div className="speaking-section">
+        <h3>🎙️ Your Speech ({getLanguageName(userLanguage)})</h3>
+        <div className="controls">
+          <button 
+            onClick={startListening} 
+            disabled={isListening || !partner}
+            className={`speak-btn ${isListening ? 'listening' : ''}`}
+          >
+            {isListening ? '🎤 Speaking...' : 'Start Speaking'}
+          </button>
+          <button 
+            onClick={stopListening} 
+            disabled={!isListening}
+            className="stop-btn"
+          >
+            Stop
+          </button>
+        </div>
+        
+        <div className="speech-output">
+          <div className="output-box">
+            {mySpeech || 'Press "Start Speaking" and talk in your language...'}
+          </div>
         </div>
       </div>
 
-      <div className="settings">
-        <div className="setting-item">
+      {/* Listening Section */}
+      <div className="listening-section">
+        <h3>👂 You Hear ({getLanguageName(userLanguage)})</h3>
+        <div className="status">
+          {isSpeaking ? '🔊 Playing translation...' : 'Ready to hear translations'}
+        </div>
+        
+        <div className="translation-output">
+          <div className="output-box translated">
+            {translatedSpeech || "You'll hear translated speech here..."}
+          </div>
+        </div>
+
+        <div className="settings">
           <label>
             <input
               type="checkbox"
               checked={autoSpeak}
               onChange={(e) => setAutoSpeak(e.target.checked)}
             />
-            Auto-speak translated messages
+            Auto-play translated speech
           </label>
         </div>
       </div>
 
-      {partner && (
-        <div className="partner-info">
-          <p>🎯 <strong>Instant Translation Active</strong></p>
-          <p>Your {getLanguageName(language)} → Partner's {getLanguageName(partner.partnerLang)}</p>
-          <p>Partner's {getLanguageName(partner.partnerLang)} → Your {getLanguageName(language)}</p>
+      {/* Conversation History */}
+      <div className="conversation-history">
+        <h3>💬 Conversation</h3>
+        <div className="chat-messages">
+          {chatLog.map((message) => (
+            <div key={message.id} className={`message ${message.isSystem ? 'system' : message.isSent ? 'sent' : 'received'}`}>
+              <div className="message-content">
+                {message.isSystem ? (
+                  <em>{message.text}</em>
+                ) : message.isSent ? (
+                  <div>
+                    <strong>You said:</strong> {message.original}
+                    <br />
+                    <em>Sent as: {message.translated}</em>
+                  </div>
+                ) : (
+                  <div>
+                    <strong>You heard:</strong> {message.translated}
+                    <br />
+                    <em>Original: {message.original}</em>
+                  </div>
+                )}
+              </div>
+              <div className="message-time">
+                {message.timestamp.toLocaleTimeString()}
+              </div>
+            </div>
+          ))}
         </div>
-      )}
-
-      {/* Quick phrases for testing */}
-      {partner && (
-        <div className="quick-phrases">
-          <h4>💬 Try saying:</h4>
-          <div className="phrase-buttons">
-            {userType === 'user1' ? (
-              <>
-                <button onClick={() => setSpeechOutput('Hello, how are you?')}>Hello, how are you?</button>
-                <button onClick={() => setSpeechOutput('What is your name?')}>What is your name?</button>
-                <button onClick={() => setSpeechOutput('Thank you')}>Thank you</button>
-              </>
-            ) : (
-              <>
-                <button onClick={() => setSpeechOutput('Hola, ¿cómo estás?')}>Hola, ¿cómo estás?</button>
-                <button onClick={() => setSpeechOutput('¿Cómo te llamas?')}>¿Cómo te llamas?</button>
-                <button onClick={() => setSpeechOutput('Gracias')}>Gracias</button>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 };

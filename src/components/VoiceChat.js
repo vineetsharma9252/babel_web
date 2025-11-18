@@ -9,9 +9,9 @@ const VoiceChat = () => {
   const [room, setRoom] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [partner, setPartner] = useState(null);
-  const [messages, setMessages] = useState([]);
   const [chatLog, setChatLog] = useState([]);
-  const socketRef = useRef(null);
+  const [userLanguage, setUserLanguage] = useState('en');
+  const [userName, setUserName] = useState('');
 
   useEffect(() => {
     // Initialize socket connection
@@ -23,7 +23,6 @@ const VoiceChat = () => {
       timeout: 10000
     });
     
-    socketRef.current = newSocket;
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
@@ -47,7 +46,7 @@ const VoiceChat = () => {
       const partnerPeer = data.peers.find(peer => peer.partnerId !== newSocket.id);
       setPartner(partnerPeer || null);
       
-      setChatLog([]); // Clear chat log when joining new room
+      setChatLog([]);
       addSystemMessage(`Joined room: ${data.roomId}`);
     });
 
@@ -63,13 +62,13 @@ const VoiceChat = () => {
       addSystemMessage('Partner left the room');
     });
 
-    newSocket.on('translated-speech', (data) => {
-      console.log('🎧 Received translated speech:', data);
+    newSocket.on('speech-to-speak', (data) => {
+      console.log('🎧 Received speech to speak:', data);
       // This will be handled in UserPanel component
     });
 
-    newSocket.on('translation-complete', (data) => {
-      console.log('✅ Translation complete:', data);
+    newSocket.on('speech-sent', (data) => {
+      console.log('✅ Speech sent confirmation:', data);
       // This will be handled in UserPanel component
     });
 
@@ -86,8 +85,8 @@ const VoiceChat = () => {
       setTimeout(() => {
         newSocket.emit('join-room', {
           roomId: roomId,
-          userLang: 'en',
-          userName: 'User'
+          userLang: userLanguage,
+          userName: userName || 'User'
         });
       }, 1000);
     }
@@ -107,7 +106,6 @@ const VoiceChat = () => {
       isSystem: true,
       timestamp: new Date()
     };
-    setMessages(prev => [...prev, message]);
     setChatLog(prev => [...prev, message]);
   };
 
@@ -124,7 +122,7 @@ const VoiceChat = () => {
     const names = {
       'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German',
       'it': 'Italian', 'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese',
-      'ru': 'Russian', 'ar': 'Arabic', 'hi': 'Hindi'
+      'ru': 'Russian', 'ar': 'Arabic', 'hi': 'Hindi', 'pt': 'Portuguese'
     };
     return names[code] || code;
   };
@@ -142,102 +140,116 @@ const VoiceChat = () => {
     }
   };
 
-  // Ensure socket is available before rendering components
-  if (!socket) {
-    return (
-      <div className="voice-chat-container">
-        <div className="loading">
-          <h2>Connecting to server...</h2>
-          <p>Please wait while we establish connection.</p>
-        </div>
-      </div>
-    );
-  }
+  const handleJoinRoom = (roomId, lang, name) => {
+    if (socket) {
+      setUserLanguage(lang);
+      setUserName(name || 'User');
+      socket.emit('join-room', {
+        roomId: roomId,
+        userLang: lang,
+        userName: name || 'User'
+      });
+    }
+  };
+
+  const handleCreateRoom = (lang, name) => {
+    if (socket) {
+      setUserLanguage(lang);
+      setUserName(name || 'User');
+      socket.emit('create-room', {
+        userLang: lang,
+        userName: name || 'User'
+      });
+    }
+  };
 
   return (
     <div className="voice-chat-container">
       <div className="header">
-        <h1>🌍 Multilingual Voice Chat</h1>
-        <p>Real-time Speech → Translate → Speak Communication</p>
+        <h1>🌍 Real-time Voice Translator</h1>
+        <p>Speak in your language, hear translations instantly</p>
         <div className="connection-status">
           Status: {isConnected ? '🟢 Connected' : '🔴 Disconnected'}
           {socket && <span> | ID: {socket.id}</span>}
         </div>
       </div>
 
-      <RoomManager 
-        socket={socket}
-        room={room}
-        partner={partner}
-        onSystemMessage={addSystemMessage}
-        onLeaveRoom={handleLeaveRoom}
-      />
-
-      {room && (
-        <div className="chat-panels">
-          <UserPanel
-            socket={socket}
-            room={room}
-            partner={partner}
-            userType="user1"
-            title="You"
-            defaultLang="en"
-            onSendMessage={addChatMessage}
-            onSystemMessage={addSystemMessage}
-            chatLog={chatLog}
-          />
-          
-          <UserPanel
-            socket={socket}
-            room={room}
-            partner={partner}
-            userType="user2"
-            title="Partner"
-            defaultLang="es"
-            onSendMessage={addChatMessage}
-            onSystemMessage={addSystemMessage}
-            chatLog={chatLog}
-          />
-        </div>
-      )}
-
-      {/* Chat Log Display */}
-      {room && (
-        <div className="chat-log">
-          <h3>💬 Conversation History</h3>
-          <div className="chat-messages">
-            {chatLog.map((message) => (
-              <div key={message.id} className={`chat-message ${message.isSystem ? 'system' : message.isSent ? 'sent' : 'received'}`}>
-                <div className="message-content">
-                  {message.isSystem ? (
-                    <em>{message.text}</em>
-                  ) : (
-                    <>
-                      <div><strong>Original:</strong> {message.original}</div>
-                      <div><strong>Translated:</strong> {message.translated}</div>
-                    </>
-                  )}
-                </div>
-                <div className="message-meta">
-                  {message.isSystem ? 'System' : message.isSent ? 'You' : 'Partner'} • 
-                  {message.timestamp.toLocaleTimeString()}
-                </div>
+      {!room ? (
+        <div className="setup-panel">
+          <div className="user-setup">
+            <h2>Join Conversation</h2>
+            <div className="setup-form">
+              <div className="form-group">
+                <label>Your Name:</label>
+                <input
+                  type="text"
+                  placeholder="Enter your name"
+                  value={userName}
+                  onChange={(e) => setUserName(e.target.value)}
+                  className="name-input"
+                />
               </div>
-            ))}
+              <div className="form-group">
+                <label>Your Language:</label>
+                <select 
+                  value={userLanguage} 
+                  onChange={(e) => setUserLanguage(e.target.value)}
+                  className="language-select"
+                >
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="it">Italian</option>
+                  <option value="ja">Japanese</option>
+                  <option value="ko">Korean</option>
+                  <option value="zh">Chinese</option>
+                  <option value="ru">Russian</option>
+                  <option value="ar">Arabic</option>
+                  <option value="hi">Hindi</option>
+                  <option value="pt">Portuguese</option>
+                </select>
+              </div>
+            </div>
           </div>
+
+          <RoomManager 
+            socket={socket}
+            room={room}
+            partner={partner}
+            onSystemMessage={addSystemMessage}
+            onLeaveRoom={handleLeaveRoom}
+            onJoinRoom={handleJoinRoom}
+            onCreateRoom={handleCreateRoom}
+            userLanguage={userLanguage}
+            userName={userName}
+          />
+        </div>
+      ) : (
+        <div className="conversation-panel">
+          <UserPanel
+            socket={socket}
+            room={room}
+            partner={partner}
+            userLanguage={userLanguage}
+            userName={userName}
+            onSendMessage={addChatMessage}
+            onSystemMessage={addSystemMessage}
+            chatLog={chatLog}
+            onLeaveRoom={handleLeaveRoom}
+          />
         </div>
       )}
 
-      {/* Debug info */}
+      {/* Connection debug info */}
       <div className="debug-info">
         <details>
-          <summary>Debug Info</summary>
+          <summary>Connection Info</summary>
           <div>
             <p><strong>Socket:</strong> {socket ? `Connected (${socket.id})` : 'Disconnected'}</p>
             <p><strong>Room:</strong> {room ? room.roomId : 'None'}</p>
-            <p><strong>Partner:</strong> {partner ? `${partner.partnerId} (${partner.partnerLang})` : 'None'}</p>
-            <p><strong>Messages:</strong> {messages.length}</p>
-            <p><strong>Chat Log:</strong> {chatLog.length} messages</p>
+            <p><strong>Partner:</strong> {partner ? `${partner.partnerId} (${getLanguageName(partner.partnerLang)})` : 'None'}</p>
+            <p><strong>Your Language:</strong> {getLanguageName(userLanguage)}</p>
           </div>
         </details>
       </div>
