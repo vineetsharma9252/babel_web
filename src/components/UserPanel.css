@@ -445,3 +445,64 @@
     width: 100%;
   }
 }
+/* Add to UserPanel.css */
+.quick-phrases {
+  margin-top: 15px;
+  padding: 12px;
+  background: #e8f5e8;
+  border-radius: 6px;
+  border: 1px solid #4CAF50;
+}
+
+.phrase-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.phrase-buttons button {
+  padding: 8px 12px;
+  background: white;
+  border: 1px solid #4CAF50;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.phrase-buttons button:hover {
+  background: #4CAF50;
+  color: white;
+}
+
+.partner-info {
+  background: #e3f2fd;
+  padding: 12px;
+  border-radius: 6px;
+  margin: 15px 0;
+  border-left: 4px solid #2196F3;
+}
+
+.partner-info p {
+  margin: 5px 0;
+  font-size: 14px;
+}
+
+.test-btn {
+  background: #9c27b0;
+  color: white;
+  padding: 10px 15px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.test-btn:hover:not(:disabled) {
+  background: #7b1fa2;
+}
+
+.test-btn:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
