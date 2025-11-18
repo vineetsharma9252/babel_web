@@ -69,6 +69,99 @@ function getRoom(roomId) {
   return rooms.get(roomId);
 }
 
+// Add quick translation function for common phrases
+function quickTranslate(text, sourceLang, targetLang) {
+  const quickTranslations = {
+    'hello': { 
+      es: 'hola', fr: 'bonjour', de: 'hallo', it: 'ciao', 
+      ja: 'こんにちは', ko: '안녕하세요', zh: '你好', ru: 'привет',
+      ar: 'مرحبا', hi: 'नमस्ते', pt: 'olá'
+    },
+    'thank you': { 
+      es: 'gracias', fr: 'merci', de: 'danke', it: 'grazie',
+      ja: 'ありがとう', ko: '감사합니다', zh: '谢谢', ru: 'спасибо',
+      ar: 'شكرا', hi: 'धन्यवाद', pt: 'obrigado'
+    },
+    'goodbye': { 
+      es: 'adiós', fr: 'au revoir', de: 'auf wiedersehen', it: 'arrivederci',
+      ja: 'さようなら', ko: '안녕', zh: '再见', ru: 'до свидания',
+      ar: 'مع السلامة', hi: 'अलविदा', pt: 'adeus'
+    },
+    'please': { 
+      es: 'por favor', fr: 's\'il vous plaît', de: 'bitte', it: 'per favore',
+      ja: 'お願いします', ko: '제발', zh: '请', ru: 'пожалуйста',
+      ar: 'من فضلك', hi: 'कृपया', pt: 'por favor'
+    },
+    'yes': { 
+      es: 'sí', fr: 'oui', de: 'ja', it: 'sì',
+      ja: 'はい', ko: '네', zh: '是', ru: 'да',
+      ar: 'نعم', hi: 'हाँ', pt: 'sim'
+    },
+    'no': { 
+      es: 'no', fr: 'non', de: 'nein', it: 'no',
+      ja: 'いいえ', ko: '아니요', zh: '不', ru: 'нет',
+      ar: 'لا', hi: 'नहीं', pt: 'não'
+    },
+    'how are you': {
+      es: 'cómo estás', fr: 'comment allez-vous', de: 'wie geht es dir', it: 'come stai',
+      ja: 'お元気ですか', ko: '어떻게 지내세요', zh: '你好吗', ru: 'как дела',
+      ar: 'كيف حالك', hi: 'आप कैसे हैं', pt: 'como você está'
+    },
+    'what is your name': {
+      es: 'cómo te llamas', fr: 'comment tu t\'appelles', de: 'wie heißt du', it: 'come ti chiami',
+      ja: 'お名前は何ですか', ko: '이름이 뭐에요', zh: '你叫什么名字', ru: 'как тебя зовут',
+      ar: 'ما اسمك', hi: 'तुम्हारा नाम क्या है', pt: 'qual é o seu nome'
+    }
+  };
+
+  const lowerText = text.toLowerCase().trim();
+  
+  // Check for exact matches first
+  if (quickTranslations[lowerText] && quickTranslations[lowerText][targetLang]) {
+    return quickTranslations[lowerText][targetLang];
+  }
+
+  // Check for partial matches
+  for (const [phrase, translations] of Object.entries(quickTranslations)) {
+    if (lowerText.includes(phrase) && translations[targetLang]) {
+      return translations[targetLang];
+    }
+  }
+
+  return text; // Return original if no quick translation found
+}
+
+function fallbackTranslation(text, sourceLang, targetLang) {
+  const translations = {
+    'hello': { es: 'hola', fr: 'bonjour', de: 'hallo', hi: 'नमस्ते', ja: 'こんにちは' },
+    'thank you': { es: 'gracias', fr: 'merci', de: 'danke', hi: 'धन्यवाद', ja: 'ありがとう' },
+    'goodbye': { es: 'adiós', fr: 'au revoir', de: 'auf wiedersehen', hi: 'अलविदा', ja: 'さようなら' },
+    'please': { es: 'por favor', fr: 's\'il vous plaît', de: 'bitte', hi: 'कृपया', ja: 'お願いします' },
+    'yes': { es: 'sí', fr: 'oui', de: 'ja', hi: 'हाँ', ja: 'はい' },
+    'no': { es: 'no', fr: 'non', de: 'nein', hi: 'नहीं', ja: 'いいえ' }
+  };
+
+  const lowerText = text.toLowerCase();
+  for (const [english, trans] of Object.entries(translations)) {
+    if (lowerText.includes(english) && trans[targetLang]) {
+      return trans[targetLang];
+    }
+  }
+  return text;
+}
+
+function getAnnouncedIp() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+
 // Socket.io connection handling
 io.on('connection', (socket) => {
   console.log('✅ User connected:', socket.id);
@@ -186,7 +279,92 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Add the speech translation handler
+  // Real-time speech translation handler
+  socket.on('real-time-speech', async (data) => {
+    try {
+      const { roomId, transcript, sourceLang, targetLang } = data;
+      const room = getRoom(roomId);
+
+      if (!room) {
+        console.error('Room not found for real-time speech');
+        return;
+      }
+
+      console.log(`🔄 Real-time translation: "${transcript}" from ${sourceLang} to ${targetLang}`);
+
+      // Immediate translation without waiting for API
+      let translatedText = transcript; // Fallback to original
+      
+      // Try quick translation first
+      const quickTranslation = quickTranslate(transcript, sourceLang, targetLang);
+      if (quickTranslation !== transcript) {
+        translatedText = quickTranslation;
+        console.log(`✅ Used quick translation: "${translatedText}"`);
+      } else {
+        // Fallback to API if quick translation doesn't work
+        try {
+          const response = await fetch(
+            `https://api.mymemory.translated.net/get?q=${encodeURIComponent(transcript)}&langpair=${sourceLang}|${targetLang}`
+          );
+          const result = await response.json();
+          
+          if (result.responseStatus === 200) {
+            translatedText = result.responseData.translatedText;
+            console.log(`✅ Used API translation: "${translatedText}"`);
+          } else {
+            translatedText = fallbackTranslation(transcript, sourceLang, targetLang);
+            console.log(`✅ Used fallback translation: "${translatedText}"`);
+          }
+        } catch (apiError) {
+          translatedText = fallbackTranslation(transcript, sourceLang, targetLang);
+          console.log(`✅ Used fallback after API error: "${translatedText}"`);
+        }
+      }
+
+      // Send translated speech to ALL other users in the room immediately
+      room.peers.forEach((peer) => {
+        if (peer.id !== socket.id) {
+          io.to(peer.id).emit('speech-to-speak', {
+            text: translatedText,
+            targetLang: targetLang,
+            originalText: transcript,
+            sourceLang: sourceLang,
+            senderId: socket.id,
+            timestamp: new Date()
+          });
+          console.log(`🎯 Sent speech to speak to ${peer.id}: "${translatedText}"`);
+        }
+      });
+
+      // Send confirmation back to sender
+      socket.emit('speech-sent', {
+        original: transcript,
+        translated: translatedText,
+        targetLang: targetLang
+      });
+
+    } catch (error) {
+      console.error('Real-time speech error:', error);
+      
+      // Emergency fallback - send original text
+      const room = getRoom(data.roomId);
+      if (room) {
+        room.peers.forEach((peer) => {
+          if (peer.id !== socket.id) {
+            io.to(peer.id).emit('speech-to-speak', {
+              text: data.transcript,
+              targetLang: data.targetLang,
+              originalText: data.transcript,
+              sourceLang: data.sourceLang,
+              senderId: socket.id
+            });
+          }
+        });
+      }
+    }
+  });
+
+  // Original speech translation handler (keep for backward compatibility)
   socket.on('speech-translation-request', async (data) => {
     try {
       const { roomId, transcript, sourceLang, targetLang } = data;
@@ -316,38 +494,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Helper functions
-function getAnnouncedIp() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return '127.0.0.1';
-}
-
-function fallbackTranslation(text, sourceLang, targetLang) {
-  const translations = {
-    'hello': { es: 'hola', fr: 'bonjour', de: 'hallo', hi: 'नमस्ते', ja: 'こんにちは' },
-    'thank you': { es: 'gracias', fr: 'merci', de: 'danke', hi: 'धन्यवाद', ja: 'ありがとう' },
-    'goodbye': { es: 'adiós', fr: 'au revoir', de: 'auf wiedersehen', hi: 'अलविदा', ja: 'さようなら' },
-    'please': { es: 'por favor', fr: 's\'il vous plaît', de: 'bitte', hi: 'कृपया', ja: 'お願いします' },
-    'yes': { es: 'sí', fr: 'oui', de: 'ja', hi: 'हाँ', ja: 'はい' },
-    'no': { es: 'no', fr: 'non', de: 'nein', hi: 'नहीं', ja: 'いいえ' }
-  };
-
-  const lowerText = text.toLowerCase();
-  for (const [english, trans] of Object.entries(translations)) {
-    if (lowerText.includes(english) && trans[targetLang]) {
-      return trans[targetLang];
-    }
-  }
-  return text;
-}
-
 // Health check endpoint
 app.get('/api/health', (req, res) => {
   res.json({ 
@@ -357,152 +503,6 @@ app.get('/api/health', (req, res) => {
     peers: peers.size
   });
 });
-// Add this socket event handler to your server
-socket.on('real-time-speech', async (data) => {
-  try {
-    const { roomId, transcript, sourceLang, targetLang } = data;
-    const room = getRoom(roomId);
-
-    if (!room) {
-      console.error('Room not found for real-time speech');
-      return;
-    }
-
-    console.log(`🔄 Real-time translation: "${transcript}" from ${sourceLang} to ${targetLang}`);
-
-    // Immediate translation without waiting for API
-    let translatedText = transcript; // Fallback to original
-    
-    // Try quick translation first
-    const quickTranslation = quickTranslate(transcript, sourceLang, targetLang);
-    if (quickTranslation !== transcript) {
-      translatedText = quickTranslation;
-      console.log(`✅ Used quick translation: "${translatedText}"`);
-    } else {
-      // Fallback to API if quick translation doesn't work
-      try {
-        const response = await fetch(
-          `https://api.mymemory.translated.net/get?q=${encodeURIComponent(transcript)}&langpair=${sourceLang}|${targetLang}`
-        );
-        const result = await response.json();
-        
-        if (result.responseStatus === 200) {
-          translatedText = result.responseData.translatedText;
-          console.log(`✅ Used API translation: "${translatedText}"`);
-        } else {
-          translatedText = fallbackTranslation(transcript, sourceLang, targetLang);
-          console.log(`✅ Used fallback translation: "${translatedText}"`);
-        }
-      } catch (apiError) {
-        translatedText = fallbackTranslation(transcript, sourceLang, targetLang);
-        console.log(`✅ Used fallback after API error: "${translatedText}"`);
-      }
-    }
-
-    // Send translated speech to ALL other users in the room immediately
-    room.peers.forEach((peer) => {
-      if (peer.id !== socket.id) {
-        io.to(peer.id).emit('speech-to-speak', {
-          text: translatedText,
-          targetLang: targetLang,
-          originalText: transcript,
-          sourceLang: sourceLang,
-          senderId: socket.id,
-          timestamp: new Date()
-        });
-        console.log(`🎯 Sent speech to speak to ${peer.id}: "${translatedText}"`);
-      }
-    });
-
-    // Send confirmation back to sender
-    socket.emit('speech-sent', {
-      original: transcript,
-      translated: translatedText,
-      targetLang: targetLang
-    });
-
-  } catch (error) {
-    console.error('Real-time speech error:', error);
-    
-    // Emergency fallback - send original text
-    const room = getRoom(data.roomId);
-    if (room) {
-      room.peers.forEach((peer) => {
-        if (peer.id !== socket.id) {
-          io.to(peer.id).emit('speech-to-speak', {
-            text: data.transcript,
-            targetLang: data.targetLang,
-            originalText: data.transcript,
-            sourceLang: data.sourceLang,
-            senderId: socket.id
-          });
-        }
-      });
-    }
-  }
-});
-
-// Add quick translation function for common phrases
-function quickTranslate(text, sourceLang, targetLang) {
-  const quickTranslations = {
-    'hello': { 
-      es: 'hola', fr: 'bonjour', de: 'hallo', it: 'ciao', 
-      ja: 'こんにちは', ko: '안녕하세요', zh: '你好', ru: 'привет',
-      ar: 'مرحبا', hi: 'नमस्ते', pt: 'olá'
-    },
-    'thank you': { 
-      es: 'gracias', fr: 'merci', de: 'danke', it: 'grazie',
-      ja: 'ありがとう', ko: '감사합니다', zh: '谢谢', ru: 'спасибо',
-      ar: 'شكرا', hi: 'धन्यवाद', pt: 'obrigado'
-    },
-    'goodbye': { 
-      es: 'adiós', fr: 'au revoir', de: 'auf wiedersehen', it: 'arrivederci',
-      ja: 'さようなら', ko: '안녕', zh: '再见', ru: 'до свидания',
-      ar: 'مع السلامة', hi: 'अलविदा', pt: 'adeus'
-    },
-    'please': { 
-      es: 'por favor', fr: 's\'il vous plaît', de: 'bitte', it: 'per favore',
-      ja: 'お願いします', ko: '제발', zh: '请', ru: 'пожалуйста',
-      ar: 'من فضلك', hi: 'कृपया', pt: 'por favor'
-    },
-    'yes': { 
-      es: 'sí', fr: 'oui', de: 'ja', it: 'sì',
-      ja: 'はい', ko: '네', zh: '是', ru: 'да',
-      ar: 'نعم', hi: 'हाँ', pt: 'sim'
-    },
-    'no': { 
-      es: 'no', fr: 'non', de: 'nein', it: 'no',
-      ja: 'いいえ', ko: '아니요', zh: '不', ru: 'нет',
-      ar: 'لا', hi: 'नहीं', pt: 'não'
-    },
-    'how are you': {
-      es: 'cómo estás', fr: 'comment allez-vous', de: 'wie geht es dir', it: 'come stai',
-      ja: 'お元気ですか', ko: '어떻게 지내세요', zh: '你好吗', ru: 'как дела',
-      ar: 'كيف حالك', hi: 'आप कैसे हैं', pt: 'como você está'
-    },
-    'what is your name': {
-      es: 'cómo te llamas', fr: 'comment tu t\'appelles', de: 'wie heißt du', it: 'come ti chiami',
-      ja: 'お名前は何ですか', ko: '이름이 뭐에요', zh: '你叫什么名字', ru: 'как тебя зовут',
-      ar: 'ما اسمك', hi: 'तुम्हारा नाम क्या है', pt: 'qual é o seu nome'
-    }
-  };
-
-  const lowerText = text.toLowerCase().trim();
-  
-  // Check for exact matches first
-  if (quickTranslations[lowerText] && quickTranslations[lowerText][targetLang]) {
-    return quickTranslations[lowerText][targetLang];
-  }
-
-  // Check for partial matches
-  for (const [phrase, translations] of Object.entries(quickTranslations)) {
-    if (lowerText.includes(phrase) && translations[targetLang]) {
-      return translations[targetLang];
-    }
-  }
-
-  return text; // Return original if no quick translation found
-}
 
 // Initialize server
 async function startServer() {
