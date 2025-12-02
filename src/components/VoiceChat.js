@@ -14,7 +14,9 @@ const VoiceChat = () => {
 
   useEffect(() => {
     // Initialize socket connection
-    const serverUrl = "http://localhost:3001";
+    const serverUrl =
+      process.env.REACT_APP_SERVER_URL || "http://localhost:3001";
+    console.log("Server Url: ", serverUrl);
     console.log("Connecting to server:", serverUrl);
 
     const newSocket = io(serverUrl, {

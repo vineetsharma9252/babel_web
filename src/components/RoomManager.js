@@ -17,7 +17,7 @@ const RoomManager = ({
 
     setIsCreating(true);
     try {
-      const serverUrl = "http://localhost:3001";
+      const serverUrl = process.env.REACT_APP_SERVER_URL || "http://localhost:3001";
       console.log("Creating room...");
 
       const response = await fetch(`${serverUrl}/api/rooms`, {
