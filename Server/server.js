@@ -2,9 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
-import mediasoup from 'mediasoup';
 import { v4 as uuidv4 } from 'uuid';
-import os from 'os';
 
 const app = express();
 const server = createServer(app);
@@ -17,120 +15,260 @@ const io = new Server(server, {
 
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
-// MediaSoup variables
-let worker;
-let router;
+// Store active rooms
 const rooms = new Map();
-const peers = new Map();
+const socketToRoom = new Map();
 
-// MediaSoup configuration
-const mediaCodecs = [
-  {
-    kind: 'audio',
-    mimeType: 'audio/opus',
-    clockRate: 48000,
-    channels: 2
-  }
-];
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', message: 'Multilingual Voice Chat Server Running' });
+});
 
-// Initialize MediaSoup
-async function createMediaSoupWorker() {
-  worker = await mediasoup.createWorker({
-    logLevel: 'warn',
-    rtcMinPort: 10000,
-    rtcMaxPort: 59999,
-  });
-
-  worker.on('died', () => {
-    console.error('MediaSoup worker died, exiting in 2 seconds...');
-    setTimeout(() => process.exit(1), 2000);
-  });
-
-  router = await worker.createRouter({ mediaCodecs });
-  console.log('✅ MediaSoup worker and router created');
-}
-
-// Room management
-function createRoom(roomId) {
+app.post('/api/rooms', (req, res) => {
+  const roomId = uuidv4().substring(0, 8).toUpperCase();
   const room = {
     id: roomId,
-    peers: new Map(),
-    router,
-    audioProducers: new Map(),
-    audioConsumers: new Map(),
-    createdAt: new Date()
+    host: null,
+    users: new Map(),
+    createdAt: new Date(),
+    maxUsers: 2
   };
-  rooms.set(roomId, room);
-  return room;
-}
-
-function getRoom(roomId) {
-  return rooms.get(roomId);
-}
-
-// Add quick translation function for common phrases
-function quickTranslate(text, sourceLang, targetLang) {
-  const quickTranslations = {
-    'hello': { 
-      es: 'hola', fr: 'bonjour', de: 'hallo', it: 'ciao', 
-      ja: 'こんにちは', ko: '안녕하세요', zh: '你好', ru: 'привет',
-      ar: 'مرحبا', hi: 'नमस्ते', pt: 'olá'
-    },
-    'thank you': { 
-      es: 'gracias', fr: 'merci', de: 'danke', it: 'grazie',
-      ja: 'ありがとう', ko: '감사합니다', zh: '谢谢', ru: 'спасибо',
-      ar: 'شكرا', hi: 'धन्यवाद', pt: 'obrigado'
-    },
-    'goodbye': { 
-      es: 'adiós', fr: 'au revoir', de: 'auf wiedersehen', it: 'arrivederci',
-      ja: 'さようなら', ko: '안녕', zh: '再见', ru: 'до свидания',
-      ar: 'مع السلامة', hi: 'अलविदा', pt: 'adeus'
-    },
-    'please': { 
-      es: 'por favor', fr: 's\'il vous plaît', de: 'bitte', it: 'per favore',
-      ja: 'お願いします', ko: '제발', zh: '请', ru: 'пожалуйста',
-      ar: 'من فضلك', hi: 'कृपया', pt: 'por favor'
-    },
-    'yes': { 
-      es: 'sí', fr: 'oui', de: 'ja', it: 'sì',
-      ja: 'はい', ko: '네', zh: '是', ru: 'да',
-      ar: 'نعم', hi: 'हाँ', pt: 'sim'
-    },
-    'no': { 
-      es: 'no', fr: 'non', de: 'nein', it: 'no',
-      ja: 'いいえ', ko: '아니요', zh: '不', ru: 'нет',
-      ar: 'لا', hi: 'नहीं', pt: 'não'
-    },
-    'how are you': {
-      es: 'cómo estás', fr: 'comment allez-vous', de: 'wie geht es dir', it: 'come stai',
-      ja: 'お元気ですか', ko: '어떻게 지내세요', zh: '你好吗', ru: 'как дела',
-      ar: 'كيف حالك', hi: 'आप कैसे हैं', pt: 'como você está'
-    },
-    'what is your name': {
-      es: 'cómo te llamas', fr: 'comment tu t\'appelles', de: 'wie heißt du', it: 'come ti chiami',
-      ja: 'お名前は何ですか', ko: '이름이 뭐에요', zh: '你叫什么名字', ru: 'как тебя зовут',
-      ar: 'ما اسمك', hi: 'तुम्हारा नाम क्या है', pt: 'qual é o seu nome'
-    }
-  };
-
-  const lowerText = text.toLowerCase().trim();
   
-  // Check for exact matches first
-  if (quickTranslations[lowerText] && quickTranslations[lowerText][targetLang]) {
-    return quickTranslations[lowerText][targetLang];
-  }
+  rooms.set(roomId, room);
+  console.log(`Room created: ${roomId}`);
+  res.json({ roomId, success: true });
+});
 
-  // Check for partial matches
-  for (const [phrase, translations] of Object.entries(quickTranslations)) {
-    if (lowerText.includes(phrase) && translations[targetLang]) {
-      return translations[targetLang];
+app.get('/api/rooms/:roomId', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room) {
+    return res.status(404).json({ error: 'Room not found' });
+  }
+  res.json({
+    roomId: room.id,
+    userCount: room.users.size,
+    maxUsers: room.maxUsers,
+    createdAt: room.createdAt
+  });
+});
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+
+  socket.on('join-room', (data) => {
+    const { roomId, userLang, userName = 'User' } = data;
+    console.log(`Join attempt: ${socket.id} to room ${roomId}`);
+
+    const room = rooms.get(roomId);
+
+    if (!room) {
+      socket.emit('join-error', { message: 'Room not found' });
+      console.log(`Room ${roomId} not found`);
+      return;
+    }
+
+    if (room.users.size >= room.maxUsers) {
+      socket.emit('join-error', { message: 'Room is full (max 2 users)' });
+      console.log(`Room ${roomId} is full`);
+      return;
+    }
+
+    // Check if user is already in a room
+    if (socketToRoom.has(socket.id)) {
+      const currentRoomId = socketToRoom.get(socket.id);
+      if (currentRoomId === roomId) {
+        socket.emit('join-error', { message: 'Already in this room' });
+        return;
+      }
+    }
+
+    // Join the room
+    socket.join(roomId);
+    socketToRoom.set(socket.id, roomId);
+
+    // Add user to room
+    const user = {
+      id: socket.id,
+      name: userName,
+      language: userLang,
+      joinedAt: new Date()
+    };
+    room.users.set(socket.id, user);
+
+    // Set first user as host
+    if (room.users.size === 1) {
+      room.host = socket.id;
+    }
+
+    console.log(`User ${socket.id} joined room ${roomId}. Total users: ${room.users.size}`);
+    
+    // Notify the user who just joined
+    socket.emit('joined-room', {
+      roomId,
+      isHost: room.host === socket.id,
+      partnerConnected: room.users.size > 1,
+      users: Array.from(room.users.values())
+    });
+
+    // Notify other users in the room about the new user
+    if (room.users.size > 1) {
+      socket.to(roomId).emit('partner-joined', {
+        partnerId: socket.id,
+        partnerLang: userLang,
+        partnerName: userName
+      });
+      
+      // Also send the current user info to the new user about existing partners
+      const otherUsers = Array.from(room.users.values()).filter(user => user.id !== socket.id);
+      otherUsers.forEach(partner => {
+        socket.emit('partner-joined', {
+          partnerId: partner.id,
+          partnerLang: partner.language,
+          partnerName: partner.name
+        });
+      });
+    }
+
+    // Send updated room state to all users
+    io.to(roomId).emit('room-update', {
+      userCount: room.users.size,
+      users: Array.from(room.users.values())
+    });
+  });
+
+  socket.on('send-message', (data) => {
+    const { roomId, message, originalLang, translatedLang } = data;
+    const room = rooms.get(roomId);
+
+    console.log('📤 Message received:', { roomId, message, originalLang, translatedLang, sender: socket.id });
+
+    if (!room || !room.users.has(socket.id)) {
+      console.log('❌ Message rejected - user not in room or room not found');
+      return;
+    }
+
+    // Broadcast to ALL users in the room (including sender for confirmation)
+    io.to(roomId).emit('receive-message', {
+      message,
+      originalLang,
+      translatedLang,
+      senderId: socket.id,
+      timestamp: new Date(),
+      isOwnMessage: false
+    });
+
+    console.log(`✅ Message broadcast to room ${roomId} by ${socket.id}`);
+  });
+
+  socket.on('speech-data', (data) => {
+    const { roomId, transcript, language } = data;
+    const room = rooms.get(roomId);
+
+    console.log('🎤 Speech data received:', { roomId, transcript, language, sender: socket.id });
+
+    if (!room || !room.users.has(socket.id)) {
+      return;
+    }
+
+    // Broadcast speech data to all other users in the room
+    socket.to(roomId).emit('partner-speech', {
+      transcript,
+      language,
+      senderId: socket.id,
+      timestamp: new Date()
+    });
+
+    console.log(`✅ Speech data broadcast to room ${roomId}`);
+  });
+
+  socket.on('translation-request', async (data) => {
+    const { roomId, text, sourceLang, targetLang } = data;
+    console.log('🔄 Translation request:', { text, sourceLang, targetLang });
+    
+    try {
+      // Use MyMemory Translation API
+      const response = await fetch(
+        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`
+      );
+      const result = await response.json();
+      
+      if (result.responseStatus === 200) {
+        socket.emit('translation-result', {
+          original: text,
+          translated: result.responseData.translatedText,
+          sourceLang,
+          targetLang
+        });
+        console.log('✅ Translation successful:', result.responseData.translatedText);
+      } else {
+        throw new Error('Translation failed: ' + result.responseDetails);
+      }
+    } catch (error) {
+      console.error('❌ Translation error:', error);
+      // Fallback translation
+      const fallback = fallbackTranslation(text, sourceLang, targetLang);
+      socket.emit('translation-result', {
+        original: text,
+        translated: fallback,
+        sourceLang,
+        targetLang
+      });
+    }
+  });
+
+  socket.on('leave-room', (data) => {
+    const { roomId } = data;
+    leaveRoom(socket, roomId);
+  });
+
+  socket.on('disconnect', () => {
+    const roomId = socketToRoom.get(socket.id);
+    if (roomId) {
+      leaveRoom(socket, roomId);
+    }
+    console.log('User disconnected:', socket.id);
+  });
+
+  function leaveRoom(socket, roomId) {
+    const room = rooms.get(roomId);
+    
+    if (room) {
+      room.users.delete(socket.id);
+      socketToRoom.delete(socket.id);
+      socket.leave(roomId);
+      
+      console.log(`User ${socket.id} left room ${roomId}. Remaining users: ${room.users.size}`);
+      
+      // Notify other users
+      socket.to(roomId).emit('partner-left', { partnerId: socket.id });
+      
+      if (room.users.size > 0) {
+        // Update host if host left
+        if (room.host === socket.id) {
+          const newHost = Array.from(room.users.keys())[0];
+          room.host = newHost;
+        }
+        
+        io.to(roomId).emit('room-update', {
+          userCount: room.users.size,
+          users: Array.from(room.users.values())
+        });
+      } else {
+        // Remove empty room after 1 minute
+        setTimeout(() => {
+          if (rooms.get(roomId)?.users.size === 0) {
+            rooms.delete(roomId);
+            console.log(`Room ${roomId} removed due to inactivity`);
+          }
+        }, 60000);
+      }
     }
   }
+});
 
-  return text; // Return original if no quick translation found
-}
-
+// Fallback translation function
 function fallbackTranslation(text, sourceLang, targetLang) {
   const translations = {
     'hello': { es: 'hola', fr: 'bonjour', de: 'hallo', hi: 'नमस्ते', ja: 'こんにちは' },
@@ -138,7 +276,11 @@ function fallbackTranslation(text, sourceLang, targetLang) {
     'goodbye': { es: 'adiós', fr: 'au revoir', de: 'auf wiedersehen', hi: 'अलविदा', ja: 'さようなら' },
     'please': { es: 'por favor', fr: 's\'il vous plaît', de: 'bitte', hi: 'कृपया', ja: 'お願いします' },
     'yes': { es: 'sí', fr: 'oui', de: 'ja', hi: 'हाँ', ja: 'はい' },
-    'no': { es: 'no', fr: 'non', de: 'nein', hi: 'नहीं', ja: 'いいえ' }
+    'no': { es: 'no', fr: 'non', de: 'nein', hi: 'नहीं', ja: 'いいえ' },
+    'how are you': { es: '¿cómo estás?', fr: 'comment ça va?', de: 'wie geht es dir?', hi: 'आप कैसे हैं?', ja: 'お元気ですか？' },
+    'what is your name': { es: '¿cómo te llamas?', fr: 'comment tu t\'appelles?', de: 'wie heißt du?', hi: 'आपका नाम क्या है?', ja: 'お名前は何ですか？' },
+    'good morning': { es: 'buenos días', fr: 'bonjour', de: 'guten morgen', hi: 'शुभ प्रभात', ja: 'おはようございます' },
+    'good night': { es: 'buenas noches', fr: 'bonne nuit', de: 'gute nacht', hi: 'शुभ रात्रि', ja: 'おやすみなさい' }
   };
 
   const lowerText = text.toLowerCase();
@@ -147,372 +289,12 @@ function fallbackTranslation(text, sourceLang, targetLang) {
       return trans[targetLang];
     }
   }
-  return text;
+
+  return text; // Return original text if no translation found
 }
 
-function getAnnouncedIp() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return '127.0.0.1';
-}
-
-// Socket.io connection handling
-io.on('connection', (socket) => {
-  console.log('✅ User connected:', socket.id);
-
-  // Store peer info immediately on connection
-  const peer = {
-    id: socket.id,
-    roomId: null,
-    transports: new Map(),
-    producers: new Map(),
-    consumers: new Map(),
-    rtpCapabilities: null,
-    userLang: 'en',
-    userName: 'User'
-  };
-  peers.set(socket.id, peer);
-
-  socket.on('create-room', async (data, callback) => {
-    try {
-      const roomId = uuidv4().substring(0, 8).toUpperCase();
-      const room = createRoom(roomId);
-      
-      // Update peer info
-      peer.roomId = roomId;
-      peer.userLang = data.userLang || 'en';
-      peer.userName = data.userName || 'User';
-      
-      room.peers.set(socket.id, peer);
-      socket.join(roomId);
-
-      callback({ 
-        success: true, 
-        roomId,
-        peers: Array.from(room.peers.values()).map(p => ({
-          id: p.id,
-          userLang: p.userLang,
-          userName: p.userName
-        }))
-      });
-      
-      console.log(`✅ Room created: ${roomId} by ${socket.id}`);
-      
-      // Notify the creator that they joined
-      socket.emit('joined-room', {
-        roomId: roomId,
-        peers: Array.from(room.peers.values()).map(p => ({
-          partnerId: p.id,
-          partnerLang: p.userLang,
-          partnerName: p.userName
-        }))
-      });
-
-    } catch (error) {
-      console.error('Error creating room:', error);
-      callback({ success: false, error: error.message });
-    }
-  });
-
-  socket.on('join-room', async (data, callback) => {
-    try {
-      const { roomId, userLang, userName } = data;
-      const room = getRoom(roomId);
-
-      if (!room) {
-        callback({ success: false, error: 'Room not found' });
-        return;
-      }
-
-      if (room.peers.size >= 2) {
-        callback({ success: false, error: 'Room is full' });
-        return;
-      }
-
-      // Update peer info
-      peer.roomId = roomId;
-      peer.userLang = userLang || 'es';
-      peer.userName = userName || 'Partner';
-      
-      room.peers.set(socket.id, peer);
-      socket.join(roomId);
-
-      callback({ 
-        success: true, 
-        roomId,
-        rtpCapabilities: router.rtpCapabilities,
-        peers: Array.from(room.peers.values()).map(p => ({
-          id: p.id,
-          userLang: p.userLang,
-          userName: p.userName
-        }))
-      });
-
-      console.log(`✅ User ${socket.id} joined room ${roomId}`);
-
-      // Notify the joiner that they joined
-      socket.emit('joined-room', {
-        roomId: roomId,
-        peers: Array.from(room.peers.values()).map(p => ({
-          partnerId: p.id,
-          partnerLang: p.userLang,
-          partnerName: p.userName
-        }))
-      });
-
-      // Notify other peers
-      socket.to(roomId).emit('partner-joined', {
-        partnerId: socket.id,
-        partnerLang: userLang || 'es',
-        partnerName: userName || 'Partner'
-      });
-
-    } catch (error) {
-      console.error('Error joining room:', error);
-      callback({ success: false, error: error.message });
-    }
-  });
-
-  // Real-time speech translation handler
-  socket.on('real-time-speech', async (data) => {
-    try {
-      const { roomId, transcript, sourceLang, targetLang } = data;
-      const room = getRoom(roomId);
-
-      if (!room) {
-        console.error('Room not found for real-time speech');
-        return;
-      }
-
-      console.log(`🔄 Real-time translation: "${transcript}" from ${sourceLang} to ${targetLang}`);
-
-      // Immediate translation without waiting for API
-      let translatedText = transcript; // Fallback to original
-      
-      // Try quick translation first
-      const quickTranslation = quickTranslate(transcript, sourceLang, targetLang);
-      if (quickTranslation !== transcript) {
-        translatedText = quickTranslation;
-        console.log(`✅ Used quick translation: "${translatedText}"`);
-      } else {
-        // Fallback to API if quick translation doesn't work
-        try {
-          const response = await fetch(
-            `https://api.mymemory.translated.net/get?q=${encodeURIComponent(transcript)}&langpair=${sourceLang}|${targetLang}`
-          );
-          const result = await response.json();
-          
-          if (result.responseStatus === 200) {
-            translatedText = result.responseData.translatedText;
-            console.log(`✅ Used API translation: "${translatedText}"`);
-          } else {
-            translatedText = fallbackTranslation(transcript, sourceLang, targetLang);
-            console.log(`✅ Used fallback translation: "${translatedText}"`);
-          }
-        } catch (apiError) {
-          translatedText = fallbackTranslation(transcript, sourceLang, targetLang);
-          console.log(`✅ Used fallback after API error: "${translatedText}"`);
-        }
-      }
-
-      // Send translated speech to ALL other users in the room immediately
-      room.peers.forEach((peer) => {
-        if (peer.id !== socket.id) {
-          io.to(peer.id).emit('speech-to-speak', {
-            text: translatedText,
-            targetLang: targetLang,
-            originalText: transcript,
-            sourceLang: sourceLang,
-            senderId: socket.id,
-            timestamp: new Date()
-          });
-          console.log(`🎯 Sent speech to speak to ${peer.id}: "${translatedText}"`);
-        }
-      });
-
-      // Send confirmation back to sender
-      socket.emit('speech-sent', {
-        original: transcript,
-        translated: translatedText,
-        targetLang: targetLang
-      });
-
-    } catch (error) {
-      console.error('Real-time speech error:', error);
-      
-      // Emergency fallback - send original text
-      const room = getRoom(data.roomId);
-      if (room) {
-        room.peers.forEach((peer) => {
-          if (peer.id !== socket.id) {
-            io.to(peer.id).emit('speech-to-speak', {
-              text: data.transcript,
-              targetLang: data.targetLang,
-              originalText: data.transcript,
-              sourceLang: data.sourceLang,
-              senderId: socket.id
-            });
-          }
-        });
-      }
-    }
-  });
-
-  // Original speech translation handler (keep for backward compatibility)
-  socket.on('speech-translation-request', async (data) => {
-    try {
-      const { roomId, transcript, sourceLang, targetLang } = data;
-      const room = getRoom(roomId);
-
-      if (!room) {
-        console.error('Room not found for translation');
-        return;
-      }
-
-      console.log(`🔄 Translating: "${transcript}" from ${sourceLang} to ${targetLang}`);
-
-      // Translate the speech
-      const response = await fetch(
-        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(transcript)}&langpair=${sourceLang}|${targetLang}`
-      );
-      const result = await response.json();
-      
-      let translatedText = transcript; // Fallback to original
-      
-      if (result.responseStatus === 200) {
-        translatedText = result.responseData.translatedText;
-      } else {
-        console.warn('Translation API failed, using fallback');
-        translatedText = fallbackTranslation(transcript, sourceLang, targetLang);
-      }
-
-      // Send translated speech to the partner
-      const senderPeer = peers.get(socket.id);
-      if (senderPeer) {
-        // Find the partner in the room
-        room.peers.forEach((peer) => {
-          if (peer.id !== socket.id) {
-            // Send to the partner
-            io.to(peer.id).emit('translated-speech', {
-              originalText: transcript,
-              translatedText: translatedText,
-              sourceLang: sourceLang,
-              targetLang: targetLang,
-              senderId: socket.id,
-              senderName: senderPeer.userName
-            });
-            console.log(`✅ Sent translated speech to ${peer.id}`);
-          }
-        });
-      }
-
-      // Also send back to sender for confirmation
-      socket.emit('translation-complete', {
-        original: transcript,
-        translated: translatedText,
-        sourceLang,
-        targetLang
-      });
-
-    } catch (error) {
-      console.error('Translation error:', error);
-      
-      // Fallback: send original text if translation fails
-      const room = getRoom(data.roomId);
-      if (room) {
-        room.peers.forEach((peer) => {
-          if (peer.id !== socket.id) {
-            io.to(peer.id).emit('translated-speech', {
-              originalText: data.transcript,
-              translatedText: data.transcript, // Fallback to original
-              sourceLang: data.sourceLang,
-              targetLang: data.targetLang,
-              senderId: socket.id
-            });
-          }
-        });
-      }
-    }
-  });
-
-  // Handle disconnection
-  socket.on('disconnect', () => {
-    console.log('❌ User disconnected:', socket.id);
-    const peer = peers.get(socket.id);
-    if (peer) {
-      const room = getRoom(peer.roomId);
-      if (room) {
-        room.peers.delete(socket.id);
-        
-        // Notify other peers
-        socket.to(room.id).emit('partner-left', { partnerId: socket.id });
-
-        // Cleanup MediaSoup resources
-        peer.transports.forEach(transport => transport.close());
-        peer.producers.forEach(producer => producer.close());
-        peer.consumers.forEach(consumer => consumer.close());
-
-        // Remove empty room
-        if (room.peers.size === 0) {
-          rooms.delete(room.id);
-          console.log(`🗑️ Room ${room.id} removed`);
-        }
-      }
-      peers.delete(socket.id);
-    }
-  });
-
-  socket.on('leave-room', () => {
-    console.log('🚪 User leaving room:', socket.id);
-    const peer = peers.get(socket.id);
-    if (peer) {
-      const room = getRoom(peer.roomId);
-      if (room) {
-        socket.leave(room.id);
-        room.peers.delete(socket.id);
-        socket.to(room.id).emit('partner-left', { partnerId: socket.id });
-
-        // Cleanup MediaSoup resources
-        peer.transports.forEach(transport => transport.close());
-        peer.producers.forEach(producer => producer.close());
-        peer.consumers.forEach(consumer => consumer.close());
-
-        if (room.peers.size === 0) {
-          rooms.delete(room.id);
-        }
-        
-        // Reset peer roomId
-        peer.roomId = null;
-      }
-    }
-  });
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌍 Multilingual Voice Chat API Ready`);
 });
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'MediaSoup Voice Chat Server Running',
-    rooms: rooms.size,
-    peers: peers.size
-  });
-});
-
-// Initialize server
-async function startServer() {
-  await createMediaSoupWorker();
-  
-  const PORT = process.env.PORT || 3001;
-  server.listen(PORT, () => {
-    console.log(`🚀 MediaSoup server running on port ${PORT}`);
-    console.log(`🌍 Real-time audio communication ready`);
-  });
-}
-
-startServer().catch(console.error);

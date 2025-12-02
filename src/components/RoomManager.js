@@ -1,151 +1,205 @@
-import React, { useState } from 'react';
-import './RoomManager.css';
+import React, { useState } from "react";
+import "./RoomManager.css";
 
-const RoomManager = ({ 
-  socket, 
-  room, 
-  partner, 
-  onSystemMessage, 
+const RoomManager = ({
+  socket,
+  room,
+  partner,
+  onSystemMessage,
   onLeaveRoom,
-  onJoinRoom,
-  onCreateRoom,
-  userLanguage,
-  userName
 }) => {
-  const [roomCode, setRoomCode] = useState('');
+  const [roomCode, setRoomCode] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const [isJoining, setIsJoining] = useState(false);
 
   const createRoom = async () => {
-    if (!socket) {
-      onSystemMessage('Not connected to server');
-      return;
-    }
+    if (!socket || isCreating) return;
 
+    setIsCreating(true);
     try {
-      onCreateRoom(userLanguage, userName);
+      const serverUrl = "http://localhost:3001";
+      console.log("Creating room...");
+
+      const response = await fetch(`${serverUrl}/api/rooms`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      const data = await response.json();
+      console.log("Room creation response:", data);
+
+      if (data.success) {
+        socket.emit("join-room", {
+          roomId: data.roomId,
+          userLang: "en",
+          userName: "User",
+        });
+
+        onSystemMessage(`Room created: ${data.roomId}`);
+      } else {
+        throw new Error("Failed to create room");
+      }
     } catch (error) {
-      onSystemMessage('Failed to create room: ' + error.message);
+      console.error("Failed to create room:", error);
+      onSystemMessage("Failed to create room: " + error.message);
+    } finally {
+      setIsCreating(false);
     }
   };
 
   const joinRoom = () => {
-    if (!socket || !roomCode.trim()) return;
+    if (!socket || !roomCode.trim() || isJoining) return;
 
+    setIsJoining(true);
     const roomId = roomCode.trim().toUpperCase();
-    onJoinRoom(roomId, userLanguage, userName);
+    console.log("Joining room:", roomId);
+
+    socket.emit("join-room", {
+      roomId: roomId,
+      userLang: "es",
+      userName: "Partner",
+    });
+
+    // Reset joining state after a delay
+    setTimeout(() => setIsJoining(false), 2000);
   };
 
   const copyRoomLink = () => {
     if (!room) return;
-    
+
     const link = `${window.location.origin}${window.location.pathname}?room=${room.roomId}`;
-    navigator.clipboard.writeText(link).then(() => {
-      alert('Room link copied to clipboard!');
-    });
+    navigator.clipboard
+      .writeText(link)
+      .then(() => {
+        alert("Room link copied to clipboard!");
+      })
+      .catch(() => {
+        // Fallback for older browsers
+        const textArea = document.createElement("textarea");
+        textArea.value = link;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+        alert("Room link copied to clipboard!");
+      });
   };
 
   const copyRoomCode = () => {
     if (!room) return;
-    
-    navigator.clipboard.writeText(room.roomId).then(() => {
-      alert('Room code copied to clipboard!');
-    });
+
+    navigator.clipboard
+      .writeText(room.roomId)
+      .then(() => {
+        alert("Room code copied to clipboard!");
+      })
+      .catch(() => {
+        // Fallback for older browsers
+        const textArea = document.createElement("textarea");
+        textArea.value = room.roomId;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+        alert("Room code copied to clipboard!");
+      });
   };
 
   return (
     <div className="room-manager">
       <div className="room-info">
-        <h2>Voice Chat Room</h2>
-        
-        {!room ? (
-          <div className="room-creation">
-            <div className="user-display">
-              <p><strong>You:</strong> {userName} ({getLanguageName(userLanguage)})</p>
-            </div>
-            
-            <div className="room-controls">
-              <button 
-                onClick={createRoom} 
-                disabled={!socket}
+        <h2>Chat Room</h2>
+        <div className="room-status">
+          <span
+            className={`status-indicator ${
+              room ? "connected" : "disconnected"
+            }`}
+          >
+            {room ? "🟢 In Room" : "🔴 No Room"}
+          </span>
+          <span className="user-count">
+            {room ? `${partner ? 2 : 1} users connected` : "0 users connected"}
+          </span>
+        </div>
+
+        <div className="room-controls">
+          {!room ? (
+            <>
+              <button
+                onClick={createRoom}
+                disabled={!socket || isCreating}
                 className="primary-btn"
               >
-                Create New Room
+                {isCreating ? "Creating..." : "Create New Room"}
               </button>
-              
               <div className="join-section">
-                <div className="join-input-group">
-                  <input
-                    type="text"
-                    placeholder="Enter room code (e.g., ABC123)"
-                    value={roomCode}
-                    onChange={(e) => setRoomCode(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && joinRoom()}
-                    className="room-code-input"
-                    disabled={!socket}
-                  />
-                  <button 
-                    onClick={joinRoom} 
-                    disabled={!socket || !roomCode.trim()}
-                    className="secondary-btn"
-                  >
-                    Join Room
+                <input
+                  type="text"
+                  placeholder="Enter room code (e.g., ABC123)"
+                  value={roomCode}
+                  onChange={(e) => setRoomCode(e.target.value)}
+                  onKeyPress={(e) => e.key === "Enter" && joinRoom()}
+                  className="room-code-input"
+                  disabled={!socket || isJoining}
+                />
+                <button
+                  onClick={joinRoom}
+                  disabled={!socket || !roomCode.trim() || isJoining}
+                  className="secondary-btn"
+                >
+                  {isJoining ? "Joining..." : "Join Room"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="room-sharing">
+                <h4>
+                  Room Code:{" "}
+                  <strong className="room-code">{room.roomId}</strong>
+                </h4>
+                <div className="sharing-buttons">
+                  <button onClick={copyRoomLink} className="secondary-btn">
+                    📋 Copy Invite Link
+                  </button>
+                  <button onClick={copyRoomCode} className="secondary-btn">
+                    🔢 Copy Code
+                  </button>
+                  <button onClick={onLeaveRoom} className="danger-btn">
+                    🚪 Leave Room
                   </button>
                 </div>
               </div>
-            </div>
+            </>
+          )}
+        </div>
+
+        {room && !partner && (
+          <div className="waiting-partner">
+            <p>⏳ Waiting for partner to join...</p>
+            <p>
+              Share this code:{" "}
+              <strong className="room-code">{room.roomId}</strong>
+            </p>
+            <p className="share-instructions">
+              Send the code or link to your friend to start chatting!
+            </p>
           </div>
-        ) : (
-          <div className="active-room">
-            <div className="room-header">
-              <h3>Room: <span className="room-code">{room.roomId}</span></h3>
-              <div className="user-status">
-                <p><strong>You:</strong> {userName} ({getLanguageName(userLanguage)})</p>
-                {partner && (
-                  <p><strong>Partner:</strong> {partner.partnerName} ({getLanguageName(partner.partnerLang)})</p>
-                )}
-              </div>
-            </div>
-            
-            <div className="room-sharing">
-              <div className="sharing-buttons">
-                <button onClick={copyRoomLink} className="secondary-btn">
-                  📋 Copy Invite Link
-                </button>
-                <button onClick={copyRoomCode} className="secondary-btn">
-                  🔢 Copy Code
-                </button>
-                <button onClick={onLeaveRoom} className="danger-btn">
-                  🚪 Leave Room
-                </button>
-              </div>
-            </div>
+        )}
 
-            {!partner && (
-              <div className="waiting-partner">
-                <p>⏳ Waiting for partner to join...</p>
-                <p>Share this code: <strong className="room-code">{room.roomId}</strong></p>
-              </div>
-            )}
-
-            {partner && (
-              <div className="partner-connected">
-                <p>✅ Partner connected! Start speaking below.</p>
-              </div>
-            )}
+        {room && partner && (
+          <div className="partner-connected">
+            <p>✅ Partner connected!</p>
+            <p>
+              They speak: <strong>{partner.partnerLang}</strong>
+            </p>
           </div>
         )}
       </div>
     </div>
   );
 };
-
-// Helper function
-function getLanguageName(code) {
-  const names = {
-    'en': 'English', 'es': 'Spanish', 'fr': 'French', 'de': 'German',
-    'it': 'Italian', 'ja': 'Japanese', 'ko': 'Korean', 'zh': 'Chinese',
-    'ru': 'Russian', 'ar': 'Arabic', 'hi': 'Hindi', 'pt': 'Portuguese'
-  };
-  return names[code] || code;
-}
 
 export default RoomManager;
