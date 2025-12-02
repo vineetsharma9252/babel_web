@@ -10,8 +10,10 @@
   "description": "",
   "dependencies": {
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "mediasoup": "^3.19.11",
+    "openai": "^6.9.1",
     "socket.io": "^4.8.1",
     "uuid": "^13.0.0"
   }
