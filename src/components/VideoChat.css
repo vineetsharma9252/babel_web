@@ -1,0 +1,218 @@
+.video-chat-container {
+  width: 100%;
+  height: 100%;
+  background: #1a1a1a;
+  color: white;
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.video-chat-header {
+  padding: 15px 20px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #404040;
+}
+
+.video-chat-header h2 {
+  margin: 0 0 10px 0;
+  color: white;
+  font-size: 1.5rem;
+}
+
+.video-chat-info {
+  display: flex;
+  gap: 20px;
+  font-size: 0.9rem;
+  color: #b0b0b0;
+}
+
+.video-controls {
+  padding: 15px 20px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #404040;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.control-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: #404040;
+  color: white;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.3s;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.control-btn:hover {
+  background: #505050;
+  transform: translateY(-1px);
+}
+
+.control-btn.active {
+  background: #4CAF50;
+}
+
+.control-btn.muted {
+  background: #f44336;
+}
+
+.control-btn.active:hover {
+  background: #45a049;
+}
+
+.control-btn.muted:hover {
+  background: #e53935;
+}
+
+.share-btn {
+  background: #2196F3;
+}
+
+.share-btn:hover {
+  background: #1976D2;
+}
+
+.invite-btn {
+  background: #FF9800;
+}
+
+.invite-btn:hover {
+  background: #F57C00;
+}
+
+.leave-btn {
+  background: #f44336;
+}
+
+.leave-btn:hover {
+  background: #e53935;
+}
+
+.video-container {
+  flex: 1;
+  min-height: 400px;
+  position: relative;
+  background: #000;
+}
+
+.loading-video {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+.spinner {
+  width: 50px;
+  height: 50px;
+  border: 3px solid #f3f3f3;
+  border-top: 3px solid #2196F3;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 20px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.video-stats {
+  padding: 15px 20px;
+  background: #2d2d2d;
+  border-top: 1px solid #404040;
+  display: flex;
+  gap: 20px;
+  font-size: 0.9rem;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.stat-label {
+  color: #b0b0b0;
+}
+
+.stat-value {
+  color: white;
+  font-weight: 500;
+}
+
+.video-tips {
+  padding: 15px 20px;
+  background: #252525;
+  border-top: 1px solid #404040;
+}
+
+.video-tips h4 {
+  margin: 0 0 10px 0;
+  color: #FF9800;
+}
+
+.video-tips ul {
+  margin: 0;
+  padding-left: 20px;
+  color: #b0b0b0;
+  font-size: 0.9rem;
+}
+
+.video-tips li {
+  margin: 5px 0;
+}
+
+/* ZegoUIKit Customization */
+#root .zego_video_conference_container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+#root .zego_video_conference_main {
+  background: #000 !important;
+}
+
+#root .zego_grid_video {
+  background: #1a1a1a !important;
+  border-color: #404040 !important;
+}
+
+#root .zego_user_name {
+  color: white !important;
+}
+
+#root .zego_controls_bar {
+  background: rgba(45, 45, 45, 0.9) !important;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  .video-controls {
+    justify-content: center;
+  }
+  
+  .control-btn {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+  
+  .video-stats {
+    flex-direction: column;
+    gap: 10px;
+  }
+  
+  .video-chat-info {
+    flex-direction: column;
+    gap: 5px;
+  }
+}

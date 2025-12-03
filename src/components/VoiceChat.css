@@ -264,3 +264,104 @@
   border-radius: 8px;
   border: 1px solid #e9ecef;
 }
+
+/* Video Chat Integration Styles */
+.video-chat-section {
+  margin: 20px 0;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  height: 600px;
+}
+
+.video-toggle-btn {
+  margin-left: 15px;
+  padding: 6px 12px;
+  background: #2196F3;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.3s;
+}
+
+.video-toggle-btn:hover {
+  background: #1976D2;
+  transform: translateY(-1px);
+}
+
+.mode-toggle {
+  text-align: center;
+  margin: 20px 0;
+  padding: 20px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 12px;
+}
+
+.mode-btn {
+  padding: 12px 24px;
+  font-size: 16px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-weight: 600;
+  color: white;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.voice-mode-btn {
+  background: #4CAF50;
+}
+
+.voice-mode-btn:hover {
+  background: #45a049;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.video-mode-btn {
+  background: #2196F3;
+}
+
+.video-mode-btn:hover {
+  background: #1976D2;
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* Connection Status with Video Button */
+.connection-status {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding: 10px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  border: 1px solid #e9ecef;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .video-chat-section {
+    height: 400px;
+  }
+  
+  .mode-btn {
+    padding: 10px 20px;
+    font-size: 14px;
+  }
+  
+  .connection-status {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  
+  .video-toggle-btn {
+    margin-left: 0;
+    margin-top: 10px;
+  }
+}
