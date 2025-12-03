@@ -11,6 +11,10 @@ const VoiceChat = () => {
   const [partner, setPartner] = useState(null);
   const [messages, setMessages] = useState([]);
   const [chatLog, setChatLog] = useState([]);
+  const [speechEnabled, setSpeechEnabled] = useState(true);
+  
+  const speechSynthesisRef = useRef(window.speechSynthesis);
+  const isSpeakingRef = useRef(false);
 
   useEffect(() => {
     // Initialize socket connection
@@ -59,13 +63,29 @@ const VoiceChat = () => {
 
     newSocket.on("receive-message", (data) => {
       console.log("📨 Received message:", data);
+      
+      const isOwnMessage = data.senderId === newSocket.id;
+      
       addChatMessage({
         text: data.message,
         lang: data.translatedLang,
-        isSent: data.senderId === newSocket.id,
+        isSent: isOwnMessage,
         senderId: data.senderId,
         timestamp: new Date(data.timestamp),
+        isOwnMessage: isOwnMessage,
+        shouldSpeak: data.shouldSpeak
       });
+
+      // Only speak if it's NOT our own message AND shouldSpeak is true AND speech is enabled
+      if (!isOwnMessage && data.shouldSpeak && speechEnabled) {
+        console.log('🔊 Speaking partner message:', data.message);
+        
+        // Use translated message if available, otherwise use original
+        const textToSpeak = data.message || data.originalMessage;
+        const langToUse = data.translatedLang || data.originalLang || 'en-US';
+        
+        speakText(textToSpeak, langToUse);
+      }
     });
 
     newSocket.on("partner-speech", (data) => {
@@ -75,7 +95,18 @@ const VoiceChat = () => {
 
     newSocket.on("translation-result", (data) => {
       console.log("🔄 Translation result:", data);
-      // Handle translation results if needed
+      
+      // If this translation is for speech, speak it
+      if (data.isForSpeech && speechEnabled) {
+        speakText(data.translated, data.targetLang);
+      }
+    });
+
+    newSocket.on("speak-text", (data) => {
+      if (speechEnabled) {
+        console.log("🔊 Speaking text from server:", data.text);
+        speakText(data.text, data.language);
+      }
     });
 
     newSocket.on("join-error", (error) => {
@@ -106,8 +137,61 @@ const VoiceChat = () => {
         console.log("🧹 Cleaning up socket connection");
         newSocket.close();
       }
+      stopAllSpeech();
     };
   }, []);
+
+  // Speech synthesis function
+  const speakText = (text, lang = 'en-US') => {
+    if (!speechEnabled || !text.trim() || isSpeakingRef.current) return;
+    
+    try {
+      isSpeakingRef.current = true;
+      
+      // Cancel any ongoing speech
+      speechSynthesisRef.current.cancel();
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = lang;
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
+      
+      utterance.onend = () => {
+        isSpeakingRef.current = false;
+      };
+      
+      utterance.onerror = (error) => {
+        console.error("🔊 Speech error:", error);
+        isSpeakingRef.current = false;
+      };
+      
+      speechSynthesisRef.current.speak(utterance);
+      console.log(`🔊 Speaking: "${text}" in ${lang}`);
+      
+    } catch (error) {
+      console.error("🔊 Speech synthesis failed:", error);
+      isSpeakingRef.current = false;
+    }
+  };
+
+  const stopAllSpeech = () => {
+    if (speechSynthesisRef.current) {
+      speechSynthesisRef.current.cancel();
+    }
+    isSpeakingRef.current = false;
+  };
+
+  const toggleSpeech = () => {
+    setSpeechEnabled(prev => {
+      const newValue = !prev;
+      if (!newValue) {
+        stopAllSpeech();
+      }
+      addSystemMessage(`Speech ${newValue ? 'enabled' : 'disabled'}`);
+      return newValue;
+    });
+  };
 
   const addSystemMessage = (text) => {
     const message = {
@@ -161,6 +245,7 @@ const VoiceChat = () => {
       setRoom(null);
       setPartner(null);
       setChatLog([]);
+      stopAllSpeech();
       addSystemMessage("Left the room");
     }
   };
@@ -173,7 +258,23 @@ const VoiceChat = () => {
         <div className="connection-status">
           Status: {isConnected ? "🟢 Connected" : "🔴 Disconnected"}
           {socket && <span> | ID: {socket.id}</span>}
+          <span className="speech-status">
+            Speech: {speechEnabled ? '🔊 ON' : '🔇 OFF'}
+          </span>
         </div>
+      </div>
+
+      {/* Speech Toggle */}
+      <div className="speech-toggle-bar">
+        <button 
+          onClick={toggleSpeech}
+          className={`speech-toggle-btn ${speechEnabled ? 'enabled' : 'disabled'}`}
+        >
+          {speechEnabled ? '🔊 Disable Speech' : '🔇 Enable Speech'}
+        </button>
+        <span className="speech-info">
+          {speechEnabled ? 'You will hear partner messages' : 'Speech is disabled'}
+        </span>
       </div>
 
       <RoomManager
@@ -196,6 +297,7 @@ const VoiceChat = () => {
             onSendMessage={addMessage}
             onSystemMessage={addSystemMessage}
             chatLog={chatLog}
+            speechEnabled={speechEnabled}
           />
 
           <UserPanel
@@ -208,6 +310,7 @@ const VoiceChat = () => {
             onSendMessage={addMessage}
             onSystemMessage={addSystemMessage}
             chatLog={chatLog}
+            speechEnabled={speechEnabled}
           />
         </div>
       )}
@@ -223,20 +326,32 @@ const VoiceChat = () => {
                 className={`chat-message ${
                   message.isSystem
                     ? "system"
-                    : message.isSent
-                    ? "sent"
-                    : "received"
+                    : message.isOwnMessage
+                    ? "own"
+                    : "partner"
                 }`}
               >
-                <div className="message-content">{message.text}</div>
-                <div className="message-meta">
-                  {message.isSystem
-                    ? "System"
-                    : message.isSent
-                    ? "You"
-                    : "Partner"}{" "}
-                  •{message.timestamp.toLocaleTimeString()}
+                <div className="message-header">
+                  <span className="message-sender">
+                    {message.isSystem
+                      ? "System"
+                      : message.isOwnMessage
+                      ? "You"
+                      : "Partner"}
+                  </span>
+                  <span className="message-time">
+                    {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
                 </div>
+                <div className="message-content">{message.text}</div>
+                {!message.isSystem && message.lang && (
+                  <div className="message-meta">
+                    Language: {getLanguageName(message.lang)}
+                    {message.isOwnMessage && !message.shouldSpeak && (
+                      <span className="no-speech-indicator"> (no speech)</span>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -266,6 +381,9 @@ const VoiceChat = () => {
             </p>
             <p>
               <strong>Chat Log:</strong> {chatLog.length} messages
+            </p>
+            <p>
+              <strong>Speech Enabled:</strong> {speechEnabled ? "Yes" : "No"}
             </p>
           </div>
         </details>

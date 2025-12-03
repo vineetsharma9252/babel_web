@@ -160,6 +160,11 @@ const RoomManager = ({
                   Room Code:{" "}
                   <strong className="room-code">{room.roomId}</strong>
                 </h4>
+                <p className="room-instructions">
+                  {!partner 
+                    ? "Share this code with your partner. You'll hear their messages spoken automatically."
+                    : "Chat is active! You'll hear your partner's messages spoken."}
+                </p>
                 <div className="sharing-buttons">
                   <button onClick={copyRoomLink} className="secondary-btn">
                     📋 Copy Invite Link
@@ -178,6 +183,7 @@ const RoomManager = ({
 
         {room && !partner && (
           <div className="waiting-partner">
+            <div className="waiting-spinner"></div>
             <p>⏳ Waiting for partner to join...</p>
             <p>
               Share this code:{" "}
@@ -191,9 +197,15 @@ const RoomManager = ({
 
         {room && partner && (
           <div className="partner-connected">
-            <p>✅ Partner connected!</p>
+            <div className="connected-badge">✅</div>
+            <p>
+              <strong>Partner connected!</strong>
+            </p>
             <p>
               They speak: <strong>{partner.partnerLang}</strong>
+            </p>
+            <p className="chat-tip">
+              Tip: Your partner's messages will be spoken automatically. You won't hear your own messages.
             </p>
           </div>
         )}

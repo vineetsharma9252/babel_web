@@ -11,13 +11,14 @@ const UserPanel = ({
   onSendMessage,
   onSystemMessage,
   chatLog,
+  speechEnabled,
 }) => {
   const [language, setLanguage] = useState(defaultLang);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speechOutput, setSpeechOutput] = useState("");
   const [autoTranslate, setAutoTranslate] = useState(true);
-  const [autoSpeak, setAutoSpeak] = useState(true);
+  const [autoSpeak, setAutoSpeak] = useState(userType === "user2"); // Only auto-speak partner messages by default
 
   const speechRecognition = useRef(null);
   const speechSynthesis = useRef(window.speechSynthesis);
@@ -32,16 +33,20 @@ const UserPanel = ({
         if (userType === "user2" && data.senderId !== socket.id) {
           console.log("🎤 Received partner speech in UserPanel:", data);
           setSpeechOutput(data.transcript);
-          if (autoSpeak) {
+          
+          // Only speak if autoSpeak is enabled AND speech is globally enabled
+          if (autoSpeak && speechEnabled) {
             speakText(data.transcript, data.language);
           }
 
-          // Also add to chat log
+          // Add to chat log (this will be displayed but not spoken again)
           onSendMessage({
             text: data.transcript,
             lang: data.language,
             isSent: false,
             senderId: data.senderId,
+            isOwnMessage: false,
+            shouldSpeak: false // Partner's speech won't trigger speech again
           });
         }
       };
@@ -52,7 +57,7 @@ const UserPanel = ({
         socket.off("partner-speech", handlePartnerSpeech);
       };
     }
-  }, [socket, userType, autoSpeak, onSendMessage]);
+  }, [socket, userType, autoSpeak, speechEnabled, onSendMessage]);
 
   const initializeSpeechRecognition = () => {
     const SpeechRecognition =
@@ -115,20 +120,26 @@ const UserPanel = ({
 
     console.log("🎤 Sending speech from UserPanel:", transcript);
 
-    // Add message to local chat immediately
+    // Add message to local chat immediately (won't be spoken)
     onSendMessage({
       text: transcript,
       lang: language,
       isSent: userType === "user1",
       senderId: socket.id,
+      isOwnMessage: true, // Mark as own message
+      shouldSpeak: false  // Don't speak own messages
     });
 
-    // Send to ALL users in the room via socket (including sender for confirmation)
+    // Send to ALL users in the room via socket
+    // Partners will receive this with shouldSpeak: true
+    // We'll send isOwnMessage: true so server knows it's sender's own message
     socket.emit("send-message", {
       roomId: room.roomId,
       message: transcript,
       originalLang: language,
       translatedLang: userType === "user1" ? partner.partnerLang : language,
+      senderId: socket.id,
+      isOwnMessage: true // Tell server this is sender's own message
     });
 
     // Send speech data for real-time display to partner
@@ -148,8 +159,11 @@ const UserPanel = ({
       });
     }
 
-    // Auto-speak if enabled
-    if (autoSpeak && userType === "user1") {
+    // For user1, we don't auto-speak our own messages
+    // Only speak if it's user2 (partner panel) and autoSpeak is enabled
+    if (userType === "user2" && autoSpeak && speechEnabled) {
+      // Only speak partner messages, not our own
+      // This check ensures we don't speak our own messages
       speakText(transcript, language);
     }
   };
@@ -179,7 +193,7 @@ const UserPanel = ({
   };
 
   const speakText = (text, lang) => {
-    if (!text.trim()) return;
+    if (!text.trim() || !speechEnabled) return;
 
     stopSpeaking();
 
@@ -244,6 +258,15 @@ const UserPanel = ({
     return names[code] || code;
   };
 
+  // Manual send message function
+  const sendManualMessage = () => {
+    const text = speechOutput.trim();
+    if (!text) return;
+    
+    handleUserSpeech(text);
+    setSpeechOutput("");
+  };
+
   return (
     <div className={`user-panel ${userType}`}>
       <h2>
@@ -304,10 +327,22 @@ const UserPanel = ({
       </div>
 
       <div className="output-box">
-        {speechOutput ||
-          (userType === "user1"
-            ? "Your speech will appear here..."
-            : "Partner's speech will appear here...")}
+        <textarea
+          value={speechOutput}
+          onChange={(e) => setSpeechOutput(e.target.value)}
+          placeholder={
+            userType === "user1"
+              ? "Speak or type your message..."
+              : "Partner's speech will appear here..."
+          }
+          rows="3"
+          className="speech-input"
+        />
+        {userType === "user1" && speechOutput.trim() && (
+          <button onClick={sendManualMessage} className="send-btn">
+            📤 Send
+          </button>
+        )}
       </div>
 
       <div className="settings">
@@ -331,7 +366,7 @@ const UserPanel = ({
               onChange={(e) => setAutoSpeak(e.target.checked)}
             />
             Auto-speak{" "}
-            {userType === "user1" ? "my speech" : "partner's messages"}
+            {userType === "user1" ? "partner's messages" : "my speech"}
           </label>
         </div>
       </div>
@@ -353,12 +388,13 @@ const UserPanel = ({
             <div
               key={index}
               className={`message-preview ${
-                message.isSent ? "sent" : "received"
+                message.isOwnMessage ? "own" : "partner"
               }`}
             >
               <span className="message-text">{message.text}</span>
               <span className="message-time">
-                {message.timestamp.toLocaleTimeString()}
+                {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {message.isOwnMessage && " (you)"}
               </span>
             </div>
           ))}
