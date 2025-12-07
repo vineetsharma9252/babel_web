@@ -379,3 +379,36 @@
   color: #666;
   margin-top: 5px;
 }
+
+/* Add to UserPanel.css */
+
+.language-badge {
+  background: #2196F3;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  margin-left: 10px;
+}
+
+.speaking-language {
+  font-style: italic;
+  color: #666;
+  margin-left: 5px;
+}
+
+.translation-flow {
+  background: #e3f2fd;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  margin-top: 5px;
+  border-left: 3px solid #4CAF50;
+}
+
+.message-meta {
+  display: block;
+  font-size: 11px;
+  color: #666;
+  margin-top: 2px;
+}

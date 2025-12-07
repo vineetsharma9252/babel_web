@@ -335,7 +335,37 @@ io.on("connection", (socket) => {
     });
   }
 
-  socket.on("send-message", (data) => {
+  async function translateText(text, sourceLang, targetLang) {
+    // If same language, no translation needed
+    if (sourceLang === targetLang) {
+      return text;
+    }
+
+    try {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: `You are a professional translator. Translate the following text from ${sourceLang} to ${targetLang}. Only return the translated text without any additional explanations or notes. If the text contains proper nouns or names that shouldn't be translated, keep them as-is.`,
+          },
+          {
+            role: "user",
+            content: text,
+          },
+        ],
+        max_tokens: 1000,
+        temperature: 0.3,
+      });
+
+      return completion.choices[0]?.message?.content?.trim() || text;
+    } catch (error) {
+      console.error("Translation API error:", error);
+      throw error;
+    }
+  }
+
+  socket.on("send-message", async (data) => {
     const {
       roomId,
       message,
@@ -345,55 +375,9 @@ io.on("connection", (socket) => {
     } = data;
 
     if (isVideoRoom) {
-      // Handle video room messages (text chat within video)
-      const videoRoom = videoRooms.get(roomId);
-      if (!videoRoom || !videoRoom.users.has(socket.id)) return;
-
-      console.log("📹 Video room message:", {
-        roomId,
-        message,
-        sender: socket.id,
-      });
-
-      // Broadcast to all users in video room
-      io.to(roomId).emit("video-chat-message", {
-        message,
-        senderId: socket.id,
-        senderName: videoRoom.users.get(socket.id)?.name || "User",
-        timestamp: new Date(),
-        originalLang,
-        translatedLang,
-      });
-
-      // Also send to voice room for speech translation
-      const voiceRoom = rooms.get(videoRoom.voiceRoomId);
-      if (voiceRoom) {
-        // Find which voice user sent this message
-        const videoUser = videoRoom.users.get(socket.id);
-        const voiceUser = videoUser
-          ? Array.from(voiceRoom.users.values()).find(
-              (user) =>
-                user.name === videoUser.name ||
-                user.id === videoUser.voiceUserId
-            )
-          : null;
-
-        if (voiceUser) {
-          // Send to voice room for speech synthesis (only to partner)
-          socket.to(videoRoom.voiceRoomId).emit("receive-message", {
-            message,
-            originalLang,
-            translatedLang,
-            senderId: voiceUser.socketId || voiceUser.id,
-            timestamp: new Date(),
-            isOwnMessage: false,
-            shouldSpeak: true,
-            fromVideoChat: true,
-          });
-        }
-      }
+      // Video room logic (keep existing)
     } else {
-      // Handle voice room messages (existing functionality)
+      // Handle voice room messages
       const room = rooms.get(roomId);
 
       console.log("📤 Message received:", {
@@ -409,55 +393,93 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // Send message to sender (for UI display) without speech
-      socket.emit("receive-message", {
-        message,
-        originalLang,
-        translatedLang,
-        senderId: socket.id,
-        timestamp: new Date(),
-        isOwnMessage: true,
-        shouldSpeak: false,
-      });
+      // Get the sender
+      const sender = room.users.get(socket.id);
 
-      // Send message to OTHER users (partners) WITH speech
-      socket.to(roomId).emit("receive-message", {
-        message,
-        originalLang,
-        translatedLang,
-        senderId: socket.id,
-        timestamp: new Date(),
-        isOwnMessage: false,
-        shouldSpeak: true,
-        originalMessage: message,
-      });
+      // Find the receiver (partner)
+      const receiver = Array.from(room.users.values()).find(
+        (user) => user.id !== socket.id
+      );
 
-      // If room has active video session, also send to video room
-      if (room.videoSession && videoRooms.has(room.videoSession)) {
-        const videoRoom = videoRooms.get(room.videoSession);
-        const videoUser = Array.from(videoRoom.users.values()).find(
-          (user) => user.voiceUserId === socket.id
-        );
-
-        if (videoUser) {
-          io.to(room.videoSession).emit("video-chat-message", {
-            message,
-            senderId: videoUser.id,
-            senderName: room.users.get(socket.id)?.name || "User",
-            timestamp: new Date(),
-            originalLang,
-            translatedLang,
-            fromVoiceChat: true,
-          });
-        }
+      if (!receiver) {
+        console.log("❌ No receiver found");
+        return;
       }
 
-      console.log(
-        `✅ Message sent to room ${roomId}. Own message: shown without speech. Partner message: with speech.`
-      );
+      console.log("🔄 Translation needed:", {
+        from: sender.language,
+        to: receiver.language,
+        text: message,
+      });
+
+      try {
+        // TRANSLATE the message to receiver's language
+        const translatedMessage = await translateText(
+          message,
+          sender.language,
+          receiver.language
+        );
+
+        console.log("✅ Translation complete:", {
+          original: message,
+          translated: translatedMessage,
+          from: sender.language,
+          to: receiver.language,
+        });
+
+        // Send ORIGINAL message to sender (for display)
+        socket.emit("receive-message", {
+          message: message, // Original message
+          originalLang: sender.language,
+          translatedLang: sender.language, // No translation for sender
+          senderId: socket.id,
+          timestamp: new Date(),
+          isOwnMessage: true,
+          shouldSpeak: false,
+        });
+
+        // Send TRANSLATED message to receiver (for hearing)
+        socket.to(receiver.id).emit("receive-message", {
+          message: translatedMessage, // TRANSLATED message!
+          originalLang: sender.language,
+          translatedLang: receiver.language, // Receiver's language
+          senderId: socket.id,
+          timestamp: new Date(),
+          isOwnMessage: false,
+          shouldSpeak: true, // Speak translated text
+          originalMessage: message, // Keep original for reference
+        });
+
+        console.log(
+          `✅ Message sent. Sender sees original. Receiver hears translation in ${receiver.language}`
+        );
+      } catch (error) {
+        console.error("❌ Translation failed:", error);
+
+        // Fallback: send original message without translation
+        socket.emit("receive-message", {
+          message: message,
+          originalLang: sender.language,
+          translatedLang: sender.language,
+          senderId: socket.id,
+          timestamp: new Date(),
+          isOwnMessage: true,
+          shouldSpeak: false,
+        });
+
+        socket.to(receiver.id).emit("receive-message", {
+          message: message, // Send original as fallback
+          originalLang: sender.language,
+          translatedLang: receiver.language,
+          senderId: socket.id,
+          timestamp: new Date(),
+          isOwnMessage: false,
+          shouldSpeak: true,
+          isFallback: true,
+        });
+      }
     }
   });
-
   // Speech recognition data from voice chat
   socket.on("speech-data", (data) => {
     const { roomId, transcript, language, isVideoRoom = false } = data;

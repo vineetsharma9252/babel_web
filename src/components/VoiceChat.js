@@ -489,12 +489,13 @@ const VoiceChat = () => {
                     <div className="message-content">{message.text}</div>
                     {!message.isSystem && message.lang && (
                       <div className="message-meta">
-                        Language: {getLanguageName(message.lang)}
-                        {message.isOwnMessage && !message.shouldSpeak && (
-                          <span className="no-speech-indicator">
-                            {" "}
-                            (no speech)
-                          </span>
+                        {message.isOwnMessage
+                          ? `You spoke in ${getLanguageName(message.lang)}`
+                          : `Translated to ${getLanguageName(message.lang)}`}
+                        {message.originalMessage && !message.isOwnMessage && (
+                          <div className="original-message">
+                            (Original: "{message.originalMessage}")
+                          </div>
                         )}
                       </div>
                     )}
