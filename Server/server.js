@@ -557,17 +557,20 @@ io.on("connection", (socket) => {
       isForSpeech = false,
       isVideoRoom = false,
     } = data;
-    console.log("🔄 Translation request:", {
+
+    console.log("🔄 Translation request received:", {
       roomId,
       text,
       sourceLang,
       targetLang,
       isForSpeech,
-      isVideoRoom,
+      socketId: socket.id,
     });
 
     try {
-      // Use OpenAI for translation
+      // Log the OpenAI request
+      console.log("🤖 Sending to OpenAI:", { text, sourceLang, targetLang });
+
       const completion = await openai.chat.completions.create({
         model: "gpt-3.5-turbo",
         messages: [
@@ -587,6 +590,14 @@ io.on("connection", (socket) => {
       const translatedText =
         completion.choices[0]?.message?.content?.trim() || text;
 
+      console.log("✅ Translation successful:", {
+        original: text,
+        translated: translatedText,
+        sourceLang,
+        targetLang,
+      });
+
+      // Make sure to emit back to the correct socket
       socket.emit("translation-result", {
         original: text,
         translated: translatedText,
@@ -595,13 +606,14 @@ io.on("connection", (socket) => {
         isForSpeech,
         isVideoRoom,
       });
-
-      console.log("✅ Translation successful:", translatedText);
     } catch (error) {
       console.error("❌ Translation error:", error.message);
+      console.error("Error details:", error);
 
       // Fallback to local translations if OpenAI fails
       const fallback = fallbackTranslation(text, sourceLang, targetLang);
+      console.log("🔄 Using fallback translation:", fallback);
+
       socket.emit("translation-result", {
         original: text,
         translated: fallback,
@@ -614,7 +626,6 @@ io.on("connection", (socket) => {
       });
     }
   });
-
   // Video chat controls
   socket.on("video-control", (data) => {
     const { videoRoomId, controlType, value } = data;

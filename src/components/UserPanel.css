@@ -330,3 +330,52 @@
   height: 16px;
   cursor: pointer;
 }
+
+/* Add these styles to UserPanel.css */
+
+.translation-box {
+  background: #e3f2fd;
+  border-radius: 8px;
+  padding: 10px;
+  margin-top: 10px;
+  border-left: 3px solid #2196F3;
+}
+
+.translation-box h4 {
+  margin: 0 0 5px 0;
+  color: #1976D2;
+  font-size: 14px;
+}
+
+.translated-text {
+  margin: 0;
+  font-size: 14px;
+  color: #333;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.translate-btn {
+  padding: 8px 16px;
+  background: #FF9800;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.3s;
+}
+
+.translate-btn:hover {
+  background: #F57C00;
+}
+
+.translation-info {
+  font-size: 12px;
+  color: #666;
+  margin-top: 5px;
+}

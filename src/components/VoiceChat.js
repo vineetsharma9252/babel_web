@@ -66,13 +66,19 @@ const VoiceChat = () => {
     });
 
     newSocket.on("receive-message", (data) => {
-      console.log("📨 Received message:", data);
+      console.log("📨 Received message with translation:", {
+        message: data.message,
+        originalLang: data.originalLang,
+        translatedLang: data.translatedLang,
+        sender: data.senderId,
+        isOwnMessage: data.senderId === newSocket.id,
+      });
 
       const isOwnMessage = data.senderId === newSocket.id;
 
       addChatMessage({
         text: data.message,
-        lang: data.translatedLang,
+        lang: data.translatedLang, // This should contain the translated language
         isSent: isOwnMessage,
         senderId: data.senderId,
         timestamp: new Date(data.timestamp),
@@ -82,15 +88,11 @@ const VoiceChat = () => {
 
       // Only speak if it's NOT our own message AND shouldSpeak is true AND speech is enabled
       if (!isOwnMessage && data.shouldSpeak && speechEnabled) {
-        console.log("🔊 Speaking partner message:", data.message);
+        console.log("🔊 Speaking translated message:", data.message);
 
-        const textToSpeak = data.message || data.originalMessage;
-        const langToUse = data.translatedLang || data.originalLang || "en-US";
-
-        speakText(textToSpeak, langToUse);
+        speakText(data.message, data.translatedLang || "en-US");
       }
     });
-
     // NEW: Video chat invitation
     newSocket.on("video-chat-invitation", (data) => {
       console.log("🎥 Video chat invitation:", data);

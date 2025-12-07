@@ -19,6 +19,7 @@ const UserPanel = ({
   const [speechOutput, setSpeechOutput] = useState("");
   const [autoTranslate, setAutoTranslate] = useState(true);
   const [autoSpeak, setAutoSpeak] = useState(userType === "user2"); // Only auto-speak partner messages by default
+  const [translatedText, setTranslatedText] = useState("");
 
   const speechRecognition = useRef(null);
   const speechSynthesis = useRef(window.speechSynthesis);
@@ -51,13 +52,32 @@ const UserPanel = ({
         }
       };
 
+      // Listen for translation results
+      const handleTranslationResult = (data) => {
+        console.log("🔄 Translation result received:", data);
+        setTranslatedText(data.translated);
+        
+        // If this translation is for speech, speak it
+        if (data.isForSpeech && speechEnabled && !data.isOwnMessage) {
+          speakText(data.translated, data.targetLang);
+        }
+        
+        // Update the last message with translation
+        if (data.original) {
+          // You might want to update the chat log here
+          onSystemMessage(`Translation: "${data.original}" → "${data.translated}"`);
+        }
+      };
+
       socket.on("partner-speech", handlePartnerSpeech);
+      socket.on("translation-result", handleTranslationResult);
 
       return () => {
         socket.off("partner-speech", handlePartnerSpeech);
+        socket.off("translation-result", handleTranslationResult);
       };
     }
-  }, [socket, userType, autoSpeak, speechEnabled, onSendMessage]);
+  }, [socket, userType, autoSpeak, speechEnabled, onSendMessage, onSystemMessage]);
 
   const initializeSpeechRecognition = () => {
     const SpeechRecognition =
@@ -113,12 +133,21 @@ const UserPanel = ({
   };
 
   const handleUserSpeech = (transcript) => {
-    if (!socket || !room || !partner) {
-      onSystemMessage("No partner connected. Speech will not be sent.");
+    if (!socket || !room) {
+      onSystemMessage("No room connected. Speech will not be sent.");
       return;
     }
 
     console.log("🎤 Sending speech from UserPanel:", transcript);
+
+    // Determine partner's language for translation
+    let targetLanguage = "en"; // Default to English
+    if (partner && partner.partnerLang) {
+      targetLanguage = partner.partnerLang;
+    } else if (userType === "user1") {
+      // If no partner yet, default to Spanish for user1
+      targetLanguage = "es";
+    }
 
     // Add message to local chat immediately (won't be spoken)
     onSendMessage({
@@ -131,15 +160,13 @@ const UserPanel = ({
     });
 
     // Send to ALL users in the room via socket
-    // Partners will receive this with shouldSpeak: true
-    // We'll send isOwnMessage: true so server knows it's sender's own message
+    // IMPORTANT: Send the message first
     socket.emit("send-message", {
       roomId: room.roomId,
       message: transcript,
       originalLang: language,
-      translatedLang: userType === "user1" ? partner.partnerLang : language,
+      translatedLang: targetLanguage,
       senderId: socket.id,
-      isOwnMessage: true // Tell server this is sender's own message
     });
 
     // Send speech data for real-time display to partner
@@ -149,30 +176,24 @@ const UserPanel = ({
       language: language,
     });
 
-    // Auto-translate if enabled
-    if (autoTranslate && userType === "user1") {
+    // Auto-translate if enabled and we have a partner
+    if (autoTranslate && partner) {
+      console.log(`🔄 Requesting translation: ${language} → ${targetLanguage}`);
       socket.emit("translation-request", {
         roomId: room.roomId,
         text: transcript,
         sourceLang: language,
-        targetLang: partner.partnerLang,
+        targetLang: targetLanguage,
+        isForSpeech: true
       });
-    }
-
-    // For user1, we don't auto-speak our own messages
-    // Only speak if it's user2 (partner panel) and autoSpeak is enabled
-    if (userType === "user2" && autoSpeak && speechEnabled) {
-      // Only speak partner messages, not our own
-      // This check ensures we don't speak our own messages
-      speakText(transcript, language);
     }
   };
 
   const startListening = () => {
     if (!speechRecognition.current) return;
 
-    if (!room || !partner) {
-      onSystemMessage("Please wait for a partner to connect first");
+    if (!room) {
+      onSystemMessage("Please join a room first");
       return;
     }
 
@@ -267,6 +288,24 @@ const UserPanel = ({
     setSpeechOutput("");
   };
 
+  // Manual translation request
+  const requestTranslation = () => {
+    const text = speechOutput.trim();
+    if (!text || !partner) return;
+    
+    console.log(`🔄 Manual translation request: ${language} → ${partner.partnerLang}`);
+    
+    socket.emit("translation-request", {
+      roomId: room.roomId,
+      text: text,
+      sourceLang: language,
+      targetLang: partner.partnerLang,
+      isForSpeech: true
+    });
+    
+    onSystemMessage(`Translating to ${getLanguageName(partner.partnerLang)}...`);
+  };
+
   return (
     <div className={`user-panel ${userType}`}>
       <h2>
@@ -298,7 +337,7 @@ const UserPanel = ({
           <>
             <button
               onClick={startListening}
-              disabled={isListening || !partner}
+              disabled={isListening || !room}
               className={`speak-btn ${isListening ? "listening" : ""}`}
             >
               {isListening ? "🎤 Listening..." : "Start Speaking"}
@@ -338,12 +377,31 @@ const UserPanel = ({
           rows="3"
           className="speech-input"
         />
-        {userType === "user1" && speechOutput.trim() && (
-          <button onClick={sendManualMessage} className="send-btn">
-            📤 Send
-          </button>
+        {userType === "user1" && (
+          <div className="action-buttons">
+            {speechOutput.trim() && (
+              <>
+                <button onClick={sendManualMessage} className="send-btn">
+                  📤 Send
+                </button>
+                {partner && autoTranslate && (
+                  <button onClick={requestTranslation} className="translate-btn">
+                    🔄 Translate
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         )}
       </div>
+
+      {/* Translation Display */}
+      {translatedText && (
+        <div className="translation-box">
+          <h4>Translation:</h4>
+          <p className="translated-text">{translatedText}</p>
+        </div>
+      )}
 
       <div className="settings">
         {userType === "user1" && (
@@ -377,6 +435,11 @@ const UserPanel = ({
             Partner speaks:{" "}
             <strong>{getLanguageName(partner.partnerLang)}</strong>
           </p>
+          {translatedText && (
+            <p className="translation-info">
+              Translated to: <strong>{getLanguageName(language)}</strong>
+            </p>
+          )}
         </div>
       )}
 
