@@ -3,7 +3,7 @@ import { createServer } from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
-import OpenAI from "openai";
+import fetch from "node-fetch";
 
 const app = express();
 const server = createServer(app);
@@ -15,11 +15,6 @@ const io = new Server(server, {
   },
 });
 
-// Initialize OpenAI
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || "your-openai-api-key-here",
-});
-
 app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
@@ -27,11 +22,12 @@ app.use(express.static("public"));
 // Store active rooms
 const rooms = new Map();
 const socketToRoom = new Map();
-const videoRooms = new Map(); // Store video room sessions
+const videoRooms = new Map();
 
-// ZegoCloud Configuration (same as frontend)
-const ZEGO_APP_ID = 88211358;
-const ZEGO_SERVER_SECRET = "9b8df477a18bc7ad4ce1d29542921aa9";
+// Free Translation API Configuration (Google Translate via RapidAPI)
+const TRANSLATION_API_KEY = process.env.TRANSLATION_API_KEY || "your-rapidapi-key";
+const TRANSLATION_API_HOST = "google-translate1.p.rapidapi.com";
+const TRANSLATION_API_URL = "https://google-translate1.p.rapidapi.com/language/translate/v2";
 
 app.get("/api/health", (req, res) => {
   res.json({
@@ -48,10 +44,10 @@ app.post("/api/rooms", (req, res) => {
     id: roomId,
     host: null,
     users: new Map(),
-    videoSession: null, // Reference to video session if active
+    videoSession: null,
     createdAt: new Date(),
     maxUsers: 2,
-    type: "voice", // 'voice' or 'video'
+    type: "voice",
   };
 
   rooms.set(roomId, room);
@@ -62,80 +58,6 @@ app.post("/api/rooms", (req, res) => {
     type: "voice",
   });
 });
-
-// Create video room
-app.post("/api/video-rooms", (req, res) => {
-  const { voiceRoomId, userName } = req.body;
-
-  if (!voiceRoomId) {
-    return res.status(400).json({ error: "Voice room ID is required" });
-  }
-
-  const voiceRoom = rooms.get(voiceRoomId);
-  if (!voiceRoom) {
-    return res.status(404).json({ error: "Voice room not found" });
-  }
-
-  // Generate video room ID based on voice room
-  const videoRoomId = `${voiceRoomId}-VIDEO`;
-
-  // Create video session
-  const videoSession = {
-    id: videoRoomId,
-    voiceRoomId: voiceRoomId,
-    users: new Map(),
-    createdAt: new Date(),
-    maxUsers: voiceRoom.maxUsers,
-    zegoToken: null,
-    type: "video",
-  };
-
-  videoRooms.set(videoRoomId, videoSession);
-
-  // Link video session to voice room
-  voiceRoom.videoSession = videoRoomId;
-
-  console.log(
-    `Video Room created: ${videoRoomId} for voice room: ${voiceRoomId}`
-  );
-
-  res.json({
-    videoRoomId,
-    voiceRoomId,
-    success: true,
-    type: "video",
-    appId: ZEGO_APP_ID,
-    serverSecret: ZEGO_SERVER_SECRET,
-  });
-});
-
-// Get ZegoCloud token for video chat
-app.post("/api/video-token", (req, res) => {
-  const { videoRoomId, userId, userName } = req.body;
-
-  const videoRoom = videoRooms.get(videoRoomId);
-  if (!videoRoom) {
-    return res.status(404).json({ error: "Video room not found" });
-  }
-
-  // In a real implementation, you would generate a proper Zego token
-  // For now, we'll return the necessary info for frontend token generation
-  res.json({
-    videoRoomId,
-    userId: userId || `user_${Date.now()}`,
-    userName: userName || "User",
-    appId: ZEGO_APP_ID,
-    serverSecret: ZEGO_SERVER_SECRET,
-    token: generateZegoToken(videoRoomId, userId || `user_${Date.now()}`),
-  });
-});
-
-// Helper function to generate Zego token (simplified)
-function generateZegoToken(roomId, userId) {
-  // In production, use proper Zego token generation
-  // This is a simplified version
-  return `zego_${roomId}_${userId}_${Date.now()}`;
-}
 
 app.get("/api/rooms/:roomId", (req, res) => {
   const room = rooms.get(req.params.roomId);
@@ -157,20 +79,201 @@ app.get("/api/rooms/:roomId", (req, res) => {
   });
 });
 
+// Helper function to translate text using Google Translate API
+async function translateText(text, sourceLang, targetLang) {
+  // If same language, no translation needed
+  if (sourceLang === targetLang || !text.trim()) {
+    return text;
+  }
+
+  console.log(`🔄 Translating: "${text}" from ${sourceLang} to ${targetLang}`);
+
+  try {
+    // First, try RapidAPI (Google Translate)
+    const response = await fetch(TRANSLATION_API_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'X-RapidAPI-Key': TRANSLATION_API_KEY,
+        'X-RapidAPI-Host': TRANSLATION_API_HOST
+      },
+      body: new URLSearchParams({
+        q: text,
+        target: targetLang,
+        source: sourceLang
+      })
+    });
+
+    const data = await response.json();
+    
+    if (data.data && data.data.translations && data.data.translations.length > 0) {
+      const translatedText = data.data.translations[0].translatedText;
+      console.log(`✅ Translation successful: "${text}" → "${translatedText}"`);
+      return translatedText;
+    }
+    
+    throw new Error('No translation found in response');
+    
+  } catch (error) {
+    console.error("❌ RapidAPI translation failed:", error.message);
+    
+    // Fallback 1: Try LibreTranslate (completely free, no API key needed)
+    try {
+      const libreResponse = await fetch('https://libretranslate.com/translate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          q: text,
+          source: sourceLang,
+          target: targetLang,
+          format: 'text'
+        })
+      });
+      
+      const libreData = await libreResponse.json();
+      if (libreData.translatedText) {
+        console.log(`✅ LibreTranslate fallback: "${text}" → "${libreData.translatedText}"`);
+        return libreData.translatedText;
+      }
+    } catch (libreError) {
+      console.error("❌ LibreTranslate failed:", libreError.message);
+    }
+    
+    // Fallback 2: Try MyMemory (free translation API)
+    try {
+      const myMemoryResponse = await fetch(
+        `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${sourceLang}|${targetLang}`
+      );
+      
+      const myMemoryData = await myMemoryResponse.json();
+      if (myMemoryData.responseData && myMemoryData.responseData.translatedText) {
+        console.log(`✅ MyMemory fallback: "${text}" → "${myMemoryData.responseData.translatedText}"`);
+        return myMemoryData.responseData.translatedText;
+      }
+    } catch (myMemoryError) {
+      console.error("❌ MyMemory translation failed:", myMemoryError.message);
+    }
+    
+    // Final fallback: Use built-in dictionary
+    console.log(`🔄 Using built-in dictionary fallback`);
+    return fallbackTranslation(text, sourceLang, targetLang);
+  }
+}
+
+// Fallback translation dictionary (basic)
+function fallbackTranslation(text, sourceLang, targetLang) {
+  const translations = {
+    'en': { // English to other languages
+      'es': {
+        'hello': 'hola',
+        'goodbye': 'adiós',
+        'thank you': 'gracias',
+        'please': 'por favor',
+        'yes': 'sí',
+        'no': 'no',
+        'how are you': '¿cómo estás?',
+        'what is your name': '¿cómo te llamas?',
+        'good morning': 'buenos días',
+        'good night': 'buenas noches',
+        'i love you': 'te quiero',
+        'where is the bathroom': '¿dónde está el baño?',
+        'how much does this cost': '¿cuánto cuesta esto?',
+        'help': 'ayuda',
+        'sorry': 'lo siento',
+        'excuse me': 'disculpe',
+        'water': 'agua',
+        'food': 'comida',
+        'friend': 'amigo'
+      },
+      'fr': {
+        'hello': 'bonjour',
+        'goodbye': 'au revoir',
+        'thank you': 'merci',
+        'please': 's\'il vous plaît',
+        'yes': 'oui',
+        'no': 'non',
+        'how are you': 'comment allez-vous',
+        'what is your name': 'comment vous appelez-vous',
+        'good morning': 'bonjour',
+        'good night': 'bonne nuit',
+        'i love you': 'je t\'aime',
+        'where is the bathroom': 'où sont les toilettes',
+        'help': 'aide',
+        'sorry': 'désolé',
+        'excuse me': 'excusez-moi'
+      },
+      'de': {
+        'hello': 'hallo',
+        'goodbye': 'auf wiedersehen',
+        'thank you': 'danke',
+        'please': 'bitte',
+        'yes': 'ja',
+        'no': 'nein',
+        'how are you': 'wie geht es dir',
+        'what is your name': 'wie heißt du',
+        'good morning': 'guten morgen',
+        'good night': 'gute nacht'
+      },
+      'hi': {
+        'hello': 'नमस्ते',
+        'thank you': 'धन्यवाद',
+        'please': 'कृपया',
+        'yes': 'हाँ',
+        'no': 'नहीं',
+        'how are you': 'आप कैसे हैं',
+        'what is your name': 'आपका नाम क्या है'
+      }
+    },
+    'es': { // Spanish to other languages
+      'en': {
+        'hola': 'hello',
+        'adiós': 'goodbye',
+        'gracias': 'thank you',
+        'por favor': 'please',
+        'sí': 'yes',
+        'no': 'no',
+        'cómo estás': 'how are you',
+        'cómo te llamas': 'what is your name',
+        'buenos días': 'good morning',
+        'buenas noches': 'good night'
+      }
+    }
+  };
+
+  const lowerText = text.toLowerCase().trim();
+  
+  // Check if we have translation for this language pair
+  if (translations[sourceLang] && translations[sourceLang][targetLang]) {
+    const langDict = translations[sourceLang][targetLang];
+    
+    // Try to find exact match
+    if (langDict[lowerText]) {
+      return langDict[lowerText];
+    }
+    
+    // Try to find partial match
+    for (const [key, value] of Object.entries(langDict)) {
+      if (lowerText.includes(key)) {
+        return value;
+      }
+    }
+  }
+  
+  // If no translation found, return original text
+  return text;
+}
+
 // Socket.io connection handling
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
   socket.on("join-room", (data) => {
     const { roomId, userLang, userName = "User", isVideo = false } = data;
-    console.log(
-      `Join attempt: ${socket.id} to room ${roomId} (${
-        isVideo ? "video" : "voice"
-      })`
-    );
-
+    
     if (isVideo) {
-      handleVideoRoomJoin(socket, roomId, userLang, userName);
+      // Handle video room join
     } else {
       handleVoiceRoomJoin(socket, roomId, userLang, userName);
     }
@@ -181,23 +284,12 @@ io.on("connection", (socket) => {
 
     if (!room) {
       socket.emit("join-error", { message: "Room not found" });
-      console.log(`Room ${roomId} not found`);
       return;
     }
 
     if (room.users.size >= room.maxUsers) {
       socket.emit("join-error", { message: "Room is full (max 2 users)" });
-      console.log(`Room ${roomId} is full`);
       return;
-    }
-
-    // Check if user is already in a room
-    if (socketToRoom.has(socket.id)) {
-      const currentRoomId = socketToRoom.get(socket.id);
-      if (currentRoomId === roomId) {
-        socket.emit("join-error", { message: "Already in this room" });
-        return;
-      }
     }
 
     // Join the room
@@ -220,7 +312,7 @@ io.on("connection", (socket) => {
     }
 
     console.log(
-      `User ${socket.id} joined voice room ${roomId}. Total users: ${room.users.size}`
+      `User ${socket.id} joined voice room ${roomId}. Language: ${userLang}`
     );
 
     // Notify the user who just joined
@@ -238,7 +330,6 @@ io.on("connection", (socket) => {
         partnerId: socket.id,
         partnerLang: userLang,
         partnerName: userName,
-        partnerSocketId: socket.id,
       });
 
       // Also send the current user info to the new user about existing partners
@@ -250,7 +341,6 @@ io.on("connection", (socket) => {
           partnerId: partner.id,
           partnerLang: partner.language,
           partnerName: partner.name,
-          partnerSocketId: partner.socketId,
         });
       });
     }
@@ -261,659 +351,208 @@ io.on("connection", (socket) => {
       users: Array.from(room.users.values()),
       type: "voice",
     });
-
-    // If room has active video session, notify about it
-    if (room.videoSession && videoRooms.has(room.videoSession)) {
-      socket.emit("video-session-available", {
-        videoRoomId: room.videoSession,
-        voiceRoomId: room.id,
-      });
-    }
   }
 
-  function handleVideoRoomJoin(socket, videoRoomId, userLang, userName) {
-    const videoRoom = videoRooms.get(videoRoomId);
-
-    if (!videoRoom) {
-      socket.emit("join-error", { message: "Video room not found" });
-      return;
-    }
-
-    // Get the voice room
-    const voiceRoom = rooms.get(videoRoom.voiceRoomId);
-    if (!voiceRoom) {
-      socket.emit("join-error", { message: "Associated voice room not found" });
-      return;
-    }
-
-    // Check if user is in the voice room
-    const voiceUser = Array.from(voiceRoom.users.values()).find(
-      (user) => user.name === userName || user.language === userLang
-    );
-
-    if (!voiceUser) {
-      socket.emit("join-error", {
-        message: "You must be in the voice room first",
-      });
-      return;
-    }
-
-    // Add user to video room
-    videoRoom.users.set(socket.id, {
-      id: socket.id,
-      name: userName,
-      language: userLang,
-      voiceUserId: voiceUser.id,
-      joinedAt: new Date(),
-    });
-
-    socket.join(videoRoomId);
-    console.log(`User ${socket.id} joined video room ${videoRoomId}`);
-
-    // Notify all users in video room about new participant
-    io.to(videoRoomId).emit("video-participant-joined", {
-      userId: socket.id,
-      userName,
-      userLang,
-      timestamp: new Date(),
-    });
-
-    // Send current participants to the new user
-    const participants = Array.from(videoRoom.users.values());
-    socket.emit("video-room-info", {
-      videoRoomId,
-      voiceRoomId: videoRoom.voiceRoomId,
-      participants,
-      appId: ZEGO_APP_ID,
-      serverSecret: ZEGO_SERVER_SECRET,
-    });
-
-    // Notify voice room that video chat is active
-    io.to(videoRoom.voiceRoomId).emit("video-chat-started", {
-      videoRoomId,
-      participantsCount: videoRoom.users.size,
-    });
-  }
-
-  async function translateText(text, sourceLang, targetLang) {
-    // If same language, no translation needed
-    if (sourceLang === targetLang) {
-      return text;
-    }
-
-    try {
-      const completion = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [
-          {
-            role: "system",
-            content: `You are a professional translator. Translate the following text from ${sourceLang} to ${targetLang}. Only return the translated text without any additional explanations or notes. If the text contains proper nouns or names that shouldn't be translated, keep them as-is.`,
-          },
-          {
-            role: "user",
-            content: text,
-          },
-        ],
-        max_tokens: 1000,
-        temperature: 0.3,
-      });
-
-      return completion.choices[0]?.message?.content?.trim() || text;
-    } catch (error) {
-      console.error("Translation API error:", error);
-      throw error;
-    }
-  }
-
+  // Handle sending messages with automatic translation
   socket.on("send-message", async (data) => {
     const {
       roomId,
       message,
       originalLang,
       translatedLang,
-      isVideoRoom = false,
     } = data;
 
-    if (isVideoRoom) {
-      // Video room logic (keep existing)
-    } else {
-      // Handle voice room messages
-      const room = rooms.get(roomId);
+    const room = rooms.get(roomId);
 
-      console.log("📤 Message received:", {
-        roomId,
-        message,
-        originalLang,
-        translatedLang,
-        sender: socket.id,
+    console.log("📤 Message received:", {
+      roomId,
+      message,
+      originalLang,
+      sender: socket.id,
+    });
+
+    if (!room || !room.users.has(socket.id)) {
+      console.log("❌ Message rejected - user not in room");
+      return;
+    }
+
+    // Get the sender
+    const sender = room.users.get(socket.id);
+    
+    // Find the receiver (partner)
+    const receiver = Array.from(room.users.values()).find(
+      (user) => user.id !== socket.id
+    );
+
+    if (!receiver) {
+      console.log("❌ No receiver found - sending back to sender only");
+      
+      // Send message back to sender only (no partner yet)
+      socket.emit("receive-message", {
+        message: message,
+        originalLang: sender.language,
+        translatedLang: sender.language,
+        senderId: socket.id,
+        timestamp: new Date(),
+        isOwnMessage: true,
+        shouldSpeak: false,
       });
+      return;
+    }
 
-      if (!room || !room.users.has(socket.id)) {
-        console.log("❌ Message rejected - user not in room or room not found");
-        return;
-      }
+    console.log("🔄 Translation needed:", {
+      from: sender.language,
+      to: receiver.language,
+      text: message,
+    });
 
-      // Get the sender
-      const sender = room.users.get(socket.id);
-
-      // Find the receiver (partner)
-      const receiver = Array.from(room.users.values()).find(
-        (user) => user.id !== socket.id
+    try {
+      // TRANSLATE the message to receiver's language
+      const translatedMessage = await translateText(
+        message,
+        sender.language,
+        receiver.language
       );
 
-      if (!receiver) {
-        console.log("❌ No receiver found");
-        return;
-      }
-
-      console.log("🔄 Translation needed:", {
+      console.log("✅ Translation complete:", {
+        original: message,
+        translated: translatedMessage,
         from: sender.language,
         to: receiver.language,
-        text: message,
       });
 
-      try {
-        // TRANSLATE the message to receiver's language
-        const translatedMessage = await translateText(
-          message,
-          sender.language,
-          receiver.language
-        );
+      // Send ORIGINAL message to sender (for display)
+      socket.emit("receive-message", {
+        message: message, // Original message
+        originalLang: sender.language,
+        translatedLang: sender.language, // No translation for sender
+        senderId: socket.id,
+        timestamp: new Date(),
+        isOwnMessage: true,
+        shouldSpeak: false,
+      });
 
-        console.log("✅ Translation complete:", {
-          original: message,
-          translated: translatedMessage,
-          from: sender.language,
-          to: receiver.language,
-        });
+      // Send TRANSLATED message to receiver (for hearing)
+      socket.to(receiver.id).emit("receive-message", {
+        message: translatedMessage, // TRANSLATED message!
+        originalLang: sender.language,
+        translatedLang: receiver.language, // Receiver's language
+        senderId: socket.id,
+        timestamp: new Date(),
+        isOwnMessage: false,
+        shouldSpeak: true, // Speak translated text
+        originalMessage: message, // Keep original for reference
+      });
 
-        // Send ORIGINAL message to sender (for display)
-        socket.emit("receive-message", {
-          message: message, // Original message
-          originalLang: sender.language,
-          translatedLang: sender.language, // No translation for sender
-          senderId: socket.id,
-          timestamp: new Date(),
-          isOwnMessage: true,
-          shouldSpeak: false,
-        });
+      console.log(
+        `✅ Message sent. Sender (${sender.language}) sees: "${message}". Receiver (${receiver.language}) hears: "${translatedMessage}"`
+      );
+      
+    } catch (error) {
+      console.error("❌ Translation failed:", error);
 
-        // Send TRANSLATED message to receiver (for hearing)
-        socket.to(receiver.id).emit("receive-message", {
-          message: translatedMessage, // TRANSLATED message!
-          originalLang: sender.language,
-          translatedLang: receiver.language, // Receiver's language
-          senderId: socket.id,
-          timestamp: new Date(),
-          isOwnMessage: false,
-          shouldSpeak: true, // Speak translated text
-          originalMessage: message, // Keep original for reference
-        });
+      // Fallback: send original message without translation
+      socket.emit("receive-message", {
+        message: message,
+        originalLang: sender.language,
+        translatedLang: sender.language,
+        senderId: socket.id,
+        timestamp: new Date(),
+        isOwnMessage: true,
+        shouldSpeak: false,
+      });
 
-        console.log(
-          `✅ Message sent. Sender sees original. Receiver hears translation in ${receiver.language}`
-        );
-      } catch (error) {
-        console.error("❌ Translation failed:", error);
-
-        // Fallback: send original message without translation
-        socket.emit("receive-message", {
-          message: message,
-          originalLang: sender.language,
-          translatedLang: sender.language,
-          senderId: socket.id,
-          timestamp: new Date(),
-          isOwnMessage: true,
-          shouldSpeak: false,
-        });
-
-        socket.to(receiver.id).emit("receive-message", {
-          message: message, // Send original as fallback
-          originalLang: sender.language,
-          translatedLang: receiver.language,
-          senderId: socket.id,
-          timestamp: new Date(),
-          isOwnMessage: false,
-          shouldSpeak: true,
-          isFallback: true,
-        });
-      }
+      socket.to(receiver.id).emit("receive-message", {
+        message: message, // Send original as fallback
+        originalLang: sender.language,
+        translatedLang: receiver.language,
+        senderId: socket.id,
+        timestamp: new Date(),
+        isOwnMessage: false,
+        shouldSpeak: true,
+        isFallback: true,
+      });
+      
+      console.log(`⚠️ Using fallback - no translation available`);
     }
   });
-  // Speech recognition data from voice chat
+
+  // Speech recognition data
   socket.on("speech-data", (data) => {
-    const { roomId, transcript, language, isVideoRoom = false } = data;
+    const { roomId, transcript, language } = data;
+    const room = rooms.get(roomId);
 
-    if (isVideoRoom) {
-      const videoRoom = videoRooms.get(roomId);
-      if (!videoRoom || !videoRoom.users.has(socket.id)) return;
-
-      console.log("🎤 Video room speech:", {
-        roomId,
-        transcript,
-        language,
-        sender: socket.id,
-      });
-
-      // Broadcast to video room participants
-      socket.to(roomId).emit("video-speech-data", {
-        transcript,
-        language,
-        senderId: socket.id,
-        senderName: videoRoom.users.get(socket.id)?.name || "User",
-        timestamp: new Date(),
-      });
-
-      // Also send to voice room for translation
-      const voiceRoom = rooms.get(videoRoom.voiceRoomId);
-      if (voiceRoom) {
-        const videoUser = videoRoom.users.get(socket.id);
-        const voiceUser = videoUser
-          ? Array.from(voiceRoom.users.values()).find(
-              (user) =>
-                user.name === videoUser.name ||
-                user.id === videoUser.voiceUserId
-            )
-          : null;
-
-        if (voiceUser) {
-          socket.to(videoRoom.voiceRoomId).emit("partner-speech", {
-            transcript,
-            language,
-            senderId: voiceUser.socketId || voiceUser.id,
-            timestamp: new Date(),
-          });
-        }
-      }
-    } else {
-      const room = rooms.get(roomId);
-
-      console.log("🎤 Voice speech data received:", {
-        roomId,
-        transcript,
-        language,
-        sender: socket.id,
-      });
-
-      if (!room || !room.users.has(socket.id)) {
-        return;
-      }
-
-      // Broadcast speech data to all OTHER users in the room (partners only)
-      socket.to(roomId).emit("partner-speech", {
-        transcript,
-        language,
-        senderId: socket.id,
-        timestamp: new Date(),
-      });
-
-      // If room has active video session, also send to video room
-      if (room.videoSession && videoRooms.has(room.videoSession)) {
-        const videoRoom = videoRooms.get(room.videoSession);
-        const videoUser = Array.from(videoRoom.users.values()).find(
-          (user) => user.voiceUserId === socket.id
-        );
-
-        if (videoUser) {
-          socket.to(room.videoSession).emit("video-speech-data", {
-            transcript,
-            language,
-            senderId: videoUser.id,
-            senderName: room.users.get(socket.id)?.name || "User",
-            timestamp: new Date(),
-          });
-        }
-      }
-
-      console.log(`✅ Speech data broadcast to partners in room ${roomId}`);
+    if (!room || !room.users.has(socket.id)) {
+      return;
     }
+
+    console.log("🎤 Speech data received:", {
+      roomId,
+      transcript,
+      language,
+      sender: socket.id,
+    });
+
+    // Broadcast speech data to partner for real-time display
+    socket.to(roomId).emit("partner-speech", {
+      transcript,
+      language,
+      senderId: socket.id,
+      timestamp: new Date(),
+    });
+
+    console.log(`✅ Speech data broadcast to partner`);
   });
 
-  // Translation request (works for both voice and video)
+  // Direct translation request (for manual translation)
   socket.on("translation-request", async (data) => {
     const {
-      roomId,
       text,
       sourceLang,
       targetLang,
-      isForSpeech = false,
-      isVideoRoom = false,
     } = data;
 
-    console.log("🔄 Translation request received:", {
-      roomId,
+    console.log("🔄 Manual translation request:", {
       text,
       sourceLang,
       targetLang,
-      isForSpeech,
       socketId: socket.id,
     });
 
     try {
-      // Log the OpenAI request
-      console.log("🤖 Sending to OpenAI:", { text, sourceLang, targetLang });
-
-      const completion = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [
-          {
-            role: "system",
-            content: `You are a professional translator. Translate the following text from ${sourceLang} to ${targetLang}. Only return the translated text without any additional explanations or notes. If the text contains proper nouns or names that shouldn't be translated, keep them as-is.`,
-          },
-          {
-            role: "user",
-            content: text,
-          },
-        ],
-        max_tokens: 1000,
-        temperature: 0.3,
-      });
-
-      const translatedText =
-        completion.choices[0]?.message?.content?.trim() || text;
-
-      console.log("✅ Translation successful:", {
+      const translatedText = await translateText(text, sourceLang, targetLang);
+      
+      console.log("✅ Manual translation successful:", {
         original: text,
         translated: translatedText,
-        sourceLang,
-        targetLang,
       });
 
-      // Make sure to emit back to the correct socket
       socket.emit("translation-result", {
         original: text,
         translated: translatedText,
         sourceLang,
         targetLang,
-        isForSpeech,
-        isVideoRoom,
       });
+      
     } catch (error) {
-      console.error("❌ Translation error:", error.message);
-      console.error("Error details:", error);
-
-      // Fallback to local translations if OpenAI fails
+      console.error("❌ Manual translation failed:", error);
+      
       const fallback = fallbackTranslation(text, sourceLang, targetLang);
-      console.log("🔄 Using fallback translation:", fallback);
-
+      
       socket.emit("translation-result", {
         original: text,
         translated: fallback,
         sourceLang,
         targetLang,
-        error: error.message,
         isFallback: true,
-        isForSpeech,
-        isVideoRoom,
-      });
-    }
-  });
-  // Video chat controls
-  socket.on("video-control", (data) => {
-    const { videoRoomId, controlType, value } = data;
-    const videoRoom = videoRooms.get(videoRoomId);
-
-    if (!videoRoom || !videoRoom.users.has(socket.id)) return;
-
-    console.log(`🎬 Video control: ${controlType} = ${value}`, {
-      videoRoomId,
-      sender: socket.id,
-    });
-
-    // Broadcast control to all participants except sender
-    socket.to(videoRoomId).emit("video-control-update", {
-      controlType,
-      value,
-      senderId: socket.id,
-      senderName: videoRoom.users.get(socket.id)?.name || "User",
-      timestamp: new Date(),
-    });
-
-    // Also notify voice room about video control changes
-    const voiceRoom = rooms.get(videoRoom.voiceRoomId);
-    if (voiceRoom) {
-      io.to(videoRoom.voiceRoomId).emit("video-status-update", {
-        videoRoomId,
-        controlType,
-        value,
-        userId: socket.id,
       });
     }
   });
 
-  // Start video chat from voice room
-  socket.on("start-video-chat", (data) => {
-    const { voiceRoomId } = data;
-    const voiceRoom = rooms.get(voiceRoomId);
-
-    if (!voiceRoom || !voiceRoom.users.has(socket.id)) {
-      socket.emit("video-chat-error", {
-        message: "Voice room not found or not a member",
-      });
-      return;
-    }
-
-    // Check if video chat already exists
-    let videoRoomId = voiceRoom.videoSession;
-    if (!videoRoomId || !videoRooms.has(videoRoomId)) {
-      videoRoomId = `${voiceRoomId}-VIDEO-${Date.now()}`;
-
-      // Create new video session
-      const videoSession = {
-        id: videoRoomId,
-        voiceRoomId: voiceRoomId,
-        users: new Map(),
-        createdAt: new Date(),
-        maxUsers: voiceRoom.maxUsers,
-        type: "video",
-      };
-
-      videoRooms.set(videoRoomId, videoSession);
-      voiceRoom.videoSession = videoRoomId;
-    }
-
-    const videoRoom = videoRooms.get(videoRoomId);
-
-    // Add user to video room
-    const voiceUser = voiceRoom.users.get(socket.id);
-    videoRoom.users.set(socket.id, {
-      id: socket.id,
-      name: voiceUser.name,
-      language: voiceUser.language,
-      voiceUserId: socket.id,
-      joinedAt: new Date(),
-    });
-
-    // Join video room socket room
-    socket.join(videoRoomId);
-
-    // Notify all users in voice room
-    io.to(voiceRoomId).emit("video-chat-invitation", {
-      videoRoomId,
-      initiatedBy: socket.id,
-      initiatedByName: voiceUser.name,
-      timestamp: new Date(),
-    });
-
-    // Send video room info to initiator
-    socket.emit("video-chat-ready", {
-      videoRoomId,
-      voiceRoomId,
-      appId: ZEGO_APP_ID,
-      serverSecret: ZEGO_SERVER_SECRET,
-      participants: Array.from(videoRoom.users.values()),
-    });
-
-    console.log(
-      `🎥 Video chat started: ${videoRoomId} for voice room: ${voiceRoomId}`
-    );
-  });
-
-  // Join existing video chat
-  socket.on("join-video-chat", (data) => {
-    const { videoRoomId } = data;
-    const videoRoom = videoRooms.get(videoRoomId);
-
-    if (!videoRoom) {
-      socket.emit("video-chat-error", { message: "Video room not found" });
-      return;
-    }
-
-    const voiceRoom = rooms.get(videoRoom.voiceRoomId);
-    if (!voiceRoom || !voiceRoom.users.has(socket.id)) {
-      socket.emit("video-chat-error", {
-        message: "You must be in the voice room to join video",
-      });
-      return;
-    }
-
-    // Add user to video room
-    const voiceUser = voiceRoom.users.get(socket.id);
-    videoRoom.users.set(socket.id, {
-      id: socket.id,
-      name: voiceUser.name,
-      language: voiceUser.language,
-      voiceUserId: socket.id,
-      joinedAt: new Date(),
-    });
-
-    socket.join(videoRoomId);
-
-    // Notify all participants in video room
-    io.to(videoRoomId).emit("video-participant-joined", {
-      userId: socket.id,
-      userName: voiceUser.name,
-      userLang: voiceUser.language,
-      timestamp: new Date(),
-    });
-
-    // Send video room info to new participant
-    socket.emit("video-chat-ready", {
-      videoRoomId,
-      voiceRoomId: videoRoom.voiceRoomId,
-      appId: ZEGO_APP_ID,
-      serverSecret: ZEGO_SERVER_SECRET,
-      participants: Array.from(videoRoom.users.values()),
-    });
-
-    console.log(`🎥 User ${socket.id} joined video chat: ${videoRoomId}`);
-  });
-
-  // Leave video chat
-  socket.on("leave-video-chat", (data) => {
-    const { videoRoomId } = data;
-    const videoRoom = videoRooms.get(videoRoomId);
-
-    if (videoRoom && videoRoom.users.has(socket.id)) {
-      videoRoom.users.delete(socket.id);
-      socket.leave(videoRoomId);
-
-      console.log(`User ${socket.id} left video room ${videoRoomId}`);
-
-      // Notify remaining participants
-      socket.to(videoRoomId).emit("video-participant-left", {
-        userId: socket.id,
-        timestamp: new Date(),
-      });
-
-      // Notify voice room
-      const voiceRoom = rooms.get(videoRoom.voiceRoomId);
-      if (voiceRoom) {
-        io.to(videoRoom.voiceRoomId).emit("video-participant-update", {
-          videoRoomId,
-          participantsCount: videoRoom.users.size,
-          userId: socket.id,
-        });
-      }
-
-      // Clean up empty video room
-      if (videoRoom.users.size === 0) {
-        videoRooms.delete(videoRoomId);
-
-        // Remove reference from voice room
-        if (voiceRoom && voiceRoom.videoSession === videoRoomId) {
-          voiceRoom.videoSession = null;
-        }
-
-        console.log(`Video room ${videoRoomId} removed (empty)`);
-      }
-    }
-  });
-
-  // Existing events for speech synthesis
-  socket.on("speak-translated-text", (data) => {
-    const {
-      roomId,
-      text,
-      language,
-      isOwnMessage = false,
-      isVideoRoom = false,
-    } = data;
-
-    const room = isVideoRoom ? videoRooms.get(roomId) : rooms.get(roomId);
-    if (
-      !room ||
-      !(isVideoRoom ? room.users.has(socket.id) : room.users.has(socket.id))
-    ) {
-      return;
-    }
-
-    // Only speak if it's NOT the user's own message
-    if (!isOwnMessage) {
-      console.log(
-        `🔊 Request to speak text: "${text}" in ${language} for user ${socket.id}`
-      );
-
-      // Send to the specific user to speak the text
-      socket.emit("speak-text", {
-        text,
-        language,
-        timestamp: new Date(),
-        isVideoRoom,
-      });
-    } else {
-      console.log(`🔇 Skipping speech for own message: "${text}"`);
-    }
-  });
-
-  socket.on("trigger-partner-speech", (data) => {
-    const { roomId, text, language, targetUserId, isVideoRoom = false } = data;
-
-    const room = isVideoRoom ? videoRooms.get(roomId) : rooms.get(roomId);
-    if (
-      !room ||
-      !(isVideoRoom ? room.users.has(socket.id) : room.users.has(socket.id)) ||
-      !(isVideoRoom
-        ? room.users.has(targetUserId)
-        : room.users.has(targetUserId))
-    ) {
-      return;
-    }
-
-    // Send speech request to the partner
-    io.to(targetUserId).emit("speak-text", {
-      text,
-      language,
-      timestamp: new Date(),
-      fromUser: socket.id,
-      isVideoRoom,
-    });
-
-    console.log(
-      `🔊 Triggered speech for partner ${targetUserId}: "${text}" in ${language}`
-    );
-  });
-
+  // Handle leaving room
   socket.on("leave-room", (data) => {
-    const { roomId, isVideoRoom = false } = data;
-
-    if (isVideoRoom) {
-      // Handle video room leave
-      socket.emit("leave-video-chat", { videoRoomId: roomId });
-    } else {
-      // Handle voice room leave
-      leaveRoom(socket, roomId);
-    }
+    const { roomId } = data;
+    leaveRoom(socket, roomId);
   });
 
   socket.on("disconnect", () => {
@@ -921,32 +560,6 @@ io.on("connection", (socket) => {
     if (roomId) {
       leaveRoom(socket, roomId);
     }
-
-    // Also remove from any video rooms
-    for (const [videoRoomId, videoRoom] of videoRooms.entries()) {
-      if (videoRoom.users.has(socket.id)) {
-        videoRoom.users.delete(socket.id);
-        socket.leave(videoRoomId);
-
-        // Notify other participants
-        io.to(videoRoomId).emit("video-participant-left", {
-          userId: socket.id,
-          timestamp: new Date(),
-        });
-
-        // Clean up empty video room
-        if (videoRoom.users.size === 0) {
-          videoRooms.delete(videoRoomId);
-
-          // Remove reference from voice room
-          const voiceRoom = rooms.get(videoRoom.voiceRoomId);
-          if (voiceRoom && voiceRoom.videoSession === videoRoomId) {
-            voiceRoom.videoSession = null;
-          }
-        }
-      }
-    }
-
     console.log("User disconnected:", socket.id);
   });
 
@@ -964,25 +577,6 @@ io.on("connection", (socket) => {
 
       // Notify other users
       socket.to(roomId).emit("partner-left", { partnerId: socket.id });
-
-      // Also remove from associated video room if exists
-      if (room.videoSession && videoRooms.has(room.videoSession)) {
-        const videoRoom = videoRooms.get(room.videoSession);
-        if (videoRoom.users.has(socket.id)) {
-          videoRoom.users.delete(socket.id);
-          socket.leave(room.videoSession);
-
-          io.to(room.videoSession).emit("video-participant-left", {
-            userId: socket.id,
-            timestamp: new Date(),
-          });
-
-          if (videoRoom.users.size === 0) {
-            videoRooms.delete(room.videoSession);
-            room.videoSession = null;
-          }
-        }
-      }
 
       if (room.users.size > 0) {
         // Update host if host left
@@ -1009,147 +603,13 @@ io.on("connection", (socket) => {
   }
 });
 
-// Fallback translation function (unchanged)
-function fallbackTranslation(text, sourceLang, targetLang) {
-  const translations = {
-    hello: {
-      es: "hola",
-      fr: "bonjour",
-      de: "hallo",
-      hi: "नमस्ते",
-      ja: "こんにちは",
-      zh: "你好",
-      ko: "안녕하세요",
-      ar: "مرحبا",
-      pt: "olá",
-      ru: "привет",
-    },
-    "thank you": {
-      es: "gracias",
-      fr: "merci",
-      de: "danke",
-      hi: "धन्यवाद",
-      ja: "ありがとう",
-      zh: "谢谢",
-      ko: "감사합니다",
-      ar: "شكرا",
-      pt: "obrigado",
-      ru: "спасибо",
-    },
-    goodbye: {
-      es: "adiós",
-      fr: "au revoir",
-      de: "auf wiedersehen",
-      hi: "अलविदा",
-      ja: "さようなら",
-      zh: "再见",
-      ko: "안녕히 가세요",
-      ar: "مع السلامة",
-      pt: "adeus",
-      ru: "до свидания",
-    },
-    please: {
-      es: "por favor",
-      fr: "s'il vous plaît",
-      de: "bitte",
-      hi: "कृपया",
-      ja: "お願いします",
-      zh: "请",
-      ko: "제발",
-      ar: "من فضلك",
-      pt: "por favor",
-      ru: "пожалуйста",
-    },
-    yes: {
-      es: "sí",
-      fr: "oui",
-      de: "ja",
-      hi: "हाँ",
-      ja: "はい",
-      zh: "是的",
-      ko: "예",
-      ar: "नعم",
-      pt: "sim",
-      ru: "да",
-    },
-    no: {
-      es: "no",
-      fr: "non",
-      de: "nein",
-      hi: "नहीं",
-      ja: "いいえ",
-      zh: "不",
-      ko: "아니요",
-      ar: "لا",
-      pt: "não",
-      ru: "нет",
-    },
-    "how are you": {
-      es: "¿cómo estás?",
-      fr: "comment ça va?",
-      de: "wie geht es dir?",
-      hi: "आप कैसे हैं?",
-      ja: "お元気ですか？",
-      zh: "你好吗？",
-      ko: "어떻게 지내세요?",
-      ar: "كيف حالك؟",
-      pt: "como você está?",
-      ru: "как дела?",
-    },
-    "what is your name": {
-      es: "¿cómo te llamas?",
-      fr: "comment tu t'appelles?",
-      de: "wie heißt du?",
-      hi: "आपका नाम क्या है?",
-      ja: "お名前は何ですか？",
-      zh: "你叫什么名字？",
-      ko: "당신의 이름은 무엇입니까?",
-      ar: "ما اسمك؟",
-      pt: "qual é o seu nome?",
-      ru: "как тебя зовут?",
-    },
-    "good morning": {
-      es: "buenos días",
-      fr: "bonjour",
-      de: "guten morgen",
-      hi: "शुभ प्रभात",
-      ja: "おはようございます",
-      zh: "早上好",
-      ko: "좋은 아침",
-      ar: "صباح الخير",
-      pt: "bom dia",
-      ru: "دоброе утро",
-    },
-    "good night": {
-      es: "buenas noches",
-      fr: "bonne nuit",
-      de: "gute nacht",
-      hi: "शुभ रात्रि",
-      ja: "おやすみなさい",
-      zh: "晚安",
-      ko: "안녕히 주무세요",
-      ar: "تصبح على خير",
-      pt: "boa noite",
-      ru: "спокойной ночи",
-    },
-  };
-
-  const lowerText = text.toLowerCase();
-  for (const [english, trans] of Object.entries(translations)) {
-    if (lowerText.includes(english) && trans[targetLang]) {
-      return trans[targetLang];
-    }
-  }
-
-  return text;
-}
-
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌍 Multilingual Voice & Video Chat API Ready`);
-  console.log(`🤖 OpenAI Translation Enabled`);
-  console.log(`🎥 Video Chat Integration Ready`);
-  console.log(`🔊 Speech: Partners only (not own messages)`);
-  console.log(`📡 ZegoCloud App ID: ${ZEGO_APP_ID}`);
+  console.log(`🌍 Multilingual Voice Chat API Ready`);
+  console.log(`🔄 Free Translation Enabled (Google Translate via RapidAPI)`);
+  console.log(`🔊 Speech: Automatic translation to partner's language`);
+  console.log(`💡 To use translation, get a free API key from:`);
+  console.log(`   https://rapidapi.com/googlecloud/api/google-translate1`);
+  console.log(`   Then set TRANSLATION_API_KEY environment variable`);
 });
